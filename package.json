@@ -14,7 +14,8 @@
     "start": "node dist/node/server/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:screenshots": "SCREENSHOTS=1 playwright test"
   },
   "dependencies": {
     "preact": "^11.1.1",
