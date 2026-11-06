@@ -1,0 +1,380 @@
+import { useEffect, useRef, useState } from "preact/hooks";
+import { PRESET_IDS, type MemberId, type PresetId } from "../../shared/protocol.ts";
+import type { Call, CallView } from "../rtc/call.ts";
+import { listMics } from "../rtc/media.ts";
+import { PRESETS } from "../rtc/presets.ts";
+import { initials, useLevel } from "./hooks.ts";
+import {
+  ChevronIcon,
+  ExpandIcon,
+  GaugeIcon,
+  LeaveIcon,
+  LinkIcon,
+  LockIcon,
+  MicIcon,
+  MicOffIcon,
+  MusicIcon,
+  ScreenIcon,
+  StopScreenIcon,
+  UnlockIcon,
+} from "./icons.tsx";
+import { StatsPanel } from "./StatsPanel.tsx";
+
+interface Share {
+  id: MemberId | "self";
+  name: string;
+  stream: MediaStream | null;
+  preset: PresetId;
+}
+
+function sharesOf(view: CallView): Share[] {
+  const remote = view.members.flatMap((m) => (m.state.share ? [{ id: m.id, name: m.name, stream: m.screen, preset: m.state.share.preset }] : []));
+  const own = view.localScreen && view.self.share ? [{ id: "self" as const, name: "You", stream: view.localScreen, preset: view.self.share.preset }] : [];
+  return [...remote, ...own];
+}
+
+export function CallScreen({ call, view }: { call: Call; view: CallView }) {
+  const [stageId, setStageId] = useState<Share["id"] | null>(null);
+  const [showStats, setShowStats] = useState(false);
+  const [menu, setMenu] = useState<"share" | "mic" | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const shares = sharesOf(view);
+  const stage = shares.find((s) => s.id === stageId) ?? shares[0] ?? null;
+  const seatsTaken = view.members.length + 1;
+
+  // Newest remote share takes the stage when it appears.
+  const shareKey = shares.map((s) => s.id).join(",");
+  const prevKey = useRef(shareKey);
+  useEffect(() => {
+    const before = new Set(prevKey.current.split(","));
+    const added = shares.find((s) => !before.has(s.id) && s.id !== "self");
+    if (added) setStageId(added.id);
+    prevKey.current = shareKey;
+  }, [shareKey]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "m" && view.self.hasMic) call.setMuted(!view.self.muted);
+      if (e.key === "Escape") setMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [call, view.self.hasMic, view.self.muted]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2200);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const run = (p: Promise<void>, failure: string) =>
+    p.catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === "NotAllowedError") return; // picker cancelled
+      console.warn(err);
+      setError(failure);
+    });
+
+  const copyInvite = async () => {
+    const url = `${location.origin}/r/${view.roomId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setToast("Invite link copied");
+    } catch {
+      window.prompt("Copy this invite link", url);
+    }
+  };
+
+  return (
+    <div class={`call${stage ? " has-stage" : ""}${showStats ? " has-stats" : ""}`} data-screen="call" data-phase={view.phase}>
+      <header class="rail">
+        <div class="rail-left">
+          <span class="wordmark">Streamroom</span>
+          <span class="rail-seats" data-testid="seat-count">
+            {seatsTaken} of 3 seats
+          </span>
+          {view.locked && (
+            <span class="badge" data-testid="locked-badge">
+              <LockIcon width={14} height={14} /> Locked
+            </span>
+          )}
+          {view.relayOnly && <span class="badge badge-debug">Relay only</span>}
+        </div>
+        <div class="rail-right">
+          {toast && (
+            <span class="toast" role="status">
+              {toast}
+            </span>
+          )}
+          <button class="btn btn-ghost" onClick={() => void copyInvite()}>
+            <LinkIcon /> <span class="label">Copy invite link</span>
+          </button>
+          {view.isHost && (
+            <button class="btn btn-ghost" aria-pressed={view.locked} data-testid="lock" onClick={() => call.setLocked(!view.locked)}>
+              {view.locked ? <UnlockIcon /> : <LockIcon />} <span class="label">{view.locked ? "Unlock room" : "Lock room"}</span>
+            </button>
+          )}
+          <button class="btn btn-ghost" aria-pressed={showStats} data-testid="stats-toggle" onClick={() => setShowStats(!showStats)}>
+            <GaugeIcon /> <span class="label">Stats</span>
+          </button>
+        </div>
+      </header>
+
+      {view.phase !== "in-call" && (
+        <div class="banner" role="status">
+          {view.phase === "reconnecting" ? "Connection lost. Reconnecting to the room." : "Connecting to the room."}
+        </div>
+      )}
+      {error && (
+        <div class="banner banner-error" role="alert">
+          {error}
+          <button class="btn btn-ghost btn-sm" onClick={() => setError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      <main class="floor">
+        {stage ? (
+          <Stage share={stage} shares={shares} onPick={setStageId} />
+        ) : (
+          <div class="empty-stage">
+            <p class="empty-title">{view.members.length === 0 ? "You're the first one here." : "Nobody is sharing."}</p>
+            <p class="empty-body">
+              {view.members.length === 0
+                ? "Copy the invite link and send it to up to two friends. The room disappears when everyone leaves."
+                : "Share a screen and it lands here for everyone."}
+            </p>
+          </div>
+        )}
+
+        <ul class="seats" aria-label="People in the room">
+          <Seat
+            name={view.name}
+            you
+            host={view.isHost}
+            muted={view.self.muted || !view.self.hasMic}
+            sharing={view.self.share !== null}
+            level={() => call.levelOf("self")}
+          />
+          {view.members.map((m) => (
+            <Seat
+              key={m.id}
+              name={m.name}
+              host={m.id === view.hostId}
+              muted={m.state.muted || !m.state.hasMic}
+              sharing={m.state.share !== null}
+              connection={m.connection}
+              level={() => call.levelOf(m.id)}
+              volume={m.volume}
+              onVolume={(v) => call.setVolume(m.id, v)}
+            />
+          ))}
+        </ul>
+      </main>
+
+      {view.self.music && (
+        <p class="hint" role="note">
+          Music mode is on: echo cancellation and noise suppression are off, and your mic sends in stereo. Wear headphones so friends don't hear
+          themselves.
+        </p>
+      )}
+
+      <footer class="dock">
+        <div class="dock-group">
+          {view.self.hasMic ? (
+            <button
+              class={`btn btn-dock${view.self.muted ? " is-off" : ""}`}
+              aria-pressed={view.self.muted}
+              data-testid="mute"
+              onClick={() => call.setMuted(!view.self.muted)}
+              title="Mute or unmute (M)"
+            >
+              {view.self.muted ? <MicOffIcon /> : <MicIcon />}
+              <span class="label">{view.self.muted ? "Unmute" : "Mute"}</span>
+            </button>
+          ) : (
+            <button class="btn btn-dock is-off" onClick={() => void run(call.enableMic(), "Couldn't open a microphone. Check the browser's permission for this site.")}>
+              <MicOffIcon />
+              <span class="label">Turn on mic</span>
+            </button>
+          )}
+          {view.self.hasMic && (
+            <MicMenu
+              open={menu === "mic"}
+              onToggle={() => setMenu(menu === "mic" ? null : "mic")}
+              current={view.micDeviceId}
+              onPick={(id) => {
+                setMenu(null);
+                void run(call.switchMic(id), "Couldn't switch to that microphone.");
+              }}
+            />
+          )}
+        </div>
+
+        <div class="dock-group">
+          {view.self.share ? (
+            <button class="btn btn-dock is-live" data-testid="stop-share" onClick={() => call.stopShare()}>
+              <StopScreenIcon />
+              <span class="label">Stop sharing</span>
+            </button>
+          ) : (
+            <div class="menu-anchor">
+              <button class="btn btn-dock" aria-expanded={menu === "share"} data-testid="share" onClick={() => setMenu(menu === "share" ? null : "share")}>
+                <ScreenIcon />
+                <span class="label">Share screen</span>
+              </button>
+              {menu === "share" && (
+                <div class="menu" role="menu" aria-label="Share quality">
+                  {PRESET_IDS.map((id) => (
+                    <button
+                      key={id}
+                      role="menuitem"
+                      class="menu-item"
+                      data-testid={`preset-${id}`}
+                      onClick={() => {
+                        setMenu(null);
+                        void run(call.startShare(id), "Screen sharing didn't start. Your browser may not support it here.");
+                      }}
+                    >
+                      <span class="menu-item-title">{PRESETS[id].label}</span>
+                      <span class="menu-item-hint">
+                        {PRESETS[id].hint}, {PRESETS[id].maxBitrate / 1_000_000} Mbps per viewer
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <button
+            class={`btn btn-dock${view.self.music ? " is-live" : ""}`}
+            aria-pressed={view.self.music}
+            data-testid="music"
+            disabled={!view.self.hasMic}
+            onClick={() => void run(call.setMusicMode(!view.self.music), "Couldn't switch the microphone mode.")}
+          >
+            <MusicIcon />
+            <span class="label">Music mode</span>
+          </button>
+        </div>
+
+        <div class="dock-group">
+          <button class="btn btn-dock btn-leave" data-testid="leave" onClick={() => call.leave()}>
+            <LeaveIcon />
+            <span class="label">Leave</span>
+          </button>
+        </div>
+      </footer>
+
+      {showStats && <StatsPanel call={call} onClose={() => setShowStats(false)} />}
+    </div>
+  );
+}
+
+function Stage({ share, shares, onPick }: { share: Share; shares: Share[]; onPick: (id: Share["id"]) => void }) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  return (
+    <section class="stage" aria-label={`${share.name === "You" ? "Your" : `${share.name}'s`} screen`}>
+      <div class="stage-frame" ref={frameRef} data-testid="stage">
+        {share.stream ? <Video stream={share.stream} /> : <p class="stage-wait">Connecting to {share.name}'s screen.</p>}
+        <div class="stage-caption">
+          <span>{share.id === "self" ? "You are sharing" : `${share.name} is sharing`}</span>
+          <span class="stage-preset">{PRESETS[share.preset].label}</span>
+          <button class="btn btn-ghost btn-sm" onClick={() => void frameRef.current?.requestFullscreen?.()} aria-label="Fullscreen">
+            <ExpandIcon width={16} height={16} />
+          </button>
+        </div>
+      </div>
+      {shares.length > 1 && (
+        <div class="switcher" role="tablist" aria-label="Screens being shared">
+          {shares.map((s) => (
+            <button key={s.id} role="tab" aria-selected={s.id === share.id} class="switcher-tab" onClick={() => onPick(s.id)}>
+              {s.id === "self" ? "Your screen" : `${s.name}'s screen`}
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Video({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.srcObject = stream;
+    void el.play().catch(() => undefined);
+  }, [stream]);
+  return <video ref={ref} class="stage-video" autoplay playsInline muted />;
+}
+
+interface SeatProps {
+  name: string;
+  you?: boolean;
+  host: boolean;
+  muted: boolean;
+  sharing: boolean;
+  connection?: RTCPeerConnectionState | "new";
+  level: () => number;
+  volume?: number;
+  onVolume?: (v: number) => void;
+}
+
+function Seat({ name, you, host, muted, sharing, connection, level, volume, onVolume }: SeatProps) {
+  const ref = useLevel<HTMLLIElement>(level);
+  const pending = connection !== undefined && connection !== "connected";
+  return (
+    <li class={`seat${muted ? " is-muted" : ""}${pending ? " is-pending" : ""}`} ref={ref} data-testid="seat">
+      <div class="seat-face" aria-hidden="true">
+        {initials(name)}
+        {muted && (
+          <span class="seat-muted">
+            <MicOffIcon width={14} height={14} />
+          </span>
+        )}
+      </div>
+      <div class="seat-name">
+        {name}
+        {you && <span class="seat-you"> (you)</span>}
+      </div>
+      <div class="seat-meta">
+        {[host && "Host", sharing && "Sharing", muted && "Muted", pending && (connection === "failed" ? "Reconnecting" : "Connecting")]
+          .filter(Boolean)
+          .join(", ") || " "}
+      </div>
+      {onVolume && volume !== undefined && (
+        <label class="seat-volume">
+          <span class="sr-only">Volume for {name}</span>
+          <input type="range" min={0} max={100} step={1} value={Math.round(volume * 100)} onInput={(e) => onVolume(Number(e.currentTarget.value) / 100)} />
+        </label>
+      )}
+    </li>
+  );
+}
+
+function MicMenu({ open, onToggle, current, onPick }: { open: boolean; onToggle: () => void; current: string | null; onPick: (id: string) => void }) {
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  useEffect(() => {
+    if (open) void listMics().then(setDevices);
+  }, [open]);
+  return (
+    <div class="menu-anchor">
+      <button class="btn btn-dock btn-icon" aria-expanded={open} aria-label="Choose microphone" onClick={onToggle}>
+        <ChevronIcon />
+      </button>
+      {open && (
+        <div class="menu" role="menu" aria-label="Microphone">
+          {devices.length === 0 && <p class="menu-empty">No other microphones found.</p>}
+          {devices.map((d, i) => (
+            <button key={d.deviceId} role="menuitemradio" aria-checked={d.deviceId === current} class="menu-item" onClick={() => onPick(d.deviceId)}>
+              <span class="menu-item-title">{d.label || `Microphone ${i + 1}`}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
