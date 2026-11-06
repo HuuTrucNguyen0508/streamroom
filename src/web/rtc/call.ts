@@ -49,6 +49,9 @@ interface LinkSenders {
   screen: RTCRtpTransceiver[];
 }
 
+/** How long the polite side waits for the other side's first offer before offering itself. */
+const FIRST_OFFER_WAIT_MS = 1500;
+
 export interface CallOptions {
   relayOnly: boolean;
 }
@@ -240,8 +243,14 @@ export class Call {
     remote.link = link;
     const senders: LinkSenders = { mic: null, screen: [] };
     this.senders.set(link, senders);
-    if (this.mic) senders.mic = this.sendMic(link, this.mic);
-    if (this.screen && this.state.share) senders.screen = this.sendScreen(link, this.screen, this.state.share.preset);
+    const attach = () => {
+      if (this.senders.get(link) !== senders) return; // dropped meanwhile
+      if (this.mic && !senders.mic) senders.mic = this.sendMic(link, this.mic);
+      if (this.screen && this.state.share && senders.screen.length === 0) senders.screen = this.sendScreen(link, this.screen, this.state.share.preset);
+    };
+    // Only the impolite side offers first; see PeerLink.firstRemoteDescription.
+    if (link.polite) void link.firstRemoteDescription(FIRST_OFFER_WAIT_MS).then(attach);
+    else attach();
   }
 
   private dropRemote(id: MemberId): void {

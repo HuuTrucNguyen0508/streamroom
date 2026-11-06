@@ -59,6 +59,10 @@ export class PeerLink {
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) this.events.signal({ candidate: candidate.toJSON() as SignalData["candidate"] });
     };
+    pc.onicecandidateerror = (e) => {
+      // 701 (unreachable) is routine for interfaces with no route; anything else is worth seeing.
+      if (e.errorCode !== 701) console.warn(`[${remoteId}] ICE candidate error ${e.errorCode} ${e.errorText} (${e.url})`);
+    };
     pc.ontrack = ({ track, streams, transceiver }) => {
       // Ask for our codec order on the receiving side too, before the answer is created.
       if (track.kind === "video") setVideoCodecPreferences(transceiver);
@@ -81,6 +85,19 @@ export class PeerLink {
       }
       this.events.change();
     };
+  }
+
+  private firstRemoteDone: () => void = () => undefined;
+  private readonly firstRemote = new Promise<void>((resolve) => (this.firstRemoteDone = resolve));
+
+  /**
+   * Resolves once the first remote description is applied, or after `ms`.
+   * The polite side waits on this before adding its own tracks: Chromium can leave a brand-new
+   * connection unable to gather ICE candidates when its very first offer is rolled back by a
+   * colliding remote offer, so we avoid that collision instead of resolving it.
+   */
+  firstRemoteDescription(ms: number): Promise<void> {
+    return Promise.race([this.firstRemote, new Promise<void>((resolve) => setTimeout(resolve, ms))]);
   }
 
   get state(): RTCPeerConnectionState {
@@ -119,6 +136,7 @@ export class PeerLink {
         await pc.setLocalDescription();
         this.sendDescription();
       }
+      this.firstRemoteDone();
     } else if (data.candidate) {
       try {
         await pc.addIceCandidate(data.candidate);
@@ -199,6 +217,7 @@ export class PeerLink {
     this.pc.onnegotiationneeded = null;
     this.pc.onicecandidate = null;
     this.pc.ontrack = null;
+    this.pc.onicecandidateerror = null;
     this.pc.onconnectionstatechange = null;
     this.pc.onsignalingstatechange = null;
     this.pc.close();

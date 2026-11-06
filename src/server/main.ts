@@ -30,7 +30,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
-  "Permissions-Policy": "microphone=(self), display-capture=(self), fullscreen=(self), camera=()",
+  "Permissions-Policy": "microphone=(self), display-capture=(self), fullscreen=(self)",
   "Content-Security-Policy":
     "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
 };
@@ -89,7 +89,8 @@ async function handleIce(req: IncomingMessage, res: ServerResponse): Promise<voi
   const turn = TURN_SECRET
     ? { secret: TURN_SECRET, ttlSeconds: TURN_TTL, urls: [`turn:${host}:${TURN_PORT}?transport=udp`, `turn:${host}:${TURN_PORT}?transport=tcp`] }
     : null;
-  const servers = await iceServers({ stunUrls: stun, turn, nowSec: Math.floor(Date.now() / 1000), label: "streamroom" });
+  // A unique username per client: coturn's user-quota counts allocations per username.
+  const servers = await iceServers({ stunUrls: stun, turn, nowSec: Math.floor(Date.now() / 1000), label: `sr-${randomId(6)}` });
   sendJson(res, { iceServers: servers, ttlSeconds: turn ? TURN_TTL : null });
 }
 
