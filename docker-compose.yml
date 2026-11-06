@@ -1,0 +1,57 @@
+name: streamroom
+
+services:
+  app:
+    build: .
+    image: streamroom:local
+    restart: unless-stopped
+    environment:
+      PORT: ${PORT:-8080}
+      TURN_SECRET: ${TURN_SECRET:?Set TURN_SECRET in .env (see .env.example)}
+      # Hostname browsers use for TURN; empty means "the host the page was loaded from".
+      TURN_HOST: ${TURN_HOST:-}
+      TURN_PORT: ${TURN_PORT:-3478}
+      TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-43200}
+      STUN_URLS: ${STUN_URLS:-}
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${PORT:-8080}:${PORT:-8080}"
+
+  # Host networking: TURN needs a large UDP port range, and Docker's per-port proxying of
+  # thousands of ports is slow and fragile. On Linux this is the reliable choice.
+  coturn:
+    image: coturn/coturn:4.7
+    restart: unless-stopped
+    network_mode: host
+    entrypoint: ["sh", "/etc/streamroom/entrypoint.sh"]
+    volumes:
+      - ./deploy/coturn/entrypoint.sh:/etc/streamroom/entrypoint.sh:ro
+    environment:
+      TURN_SECRET: ${TURN_SECRET:?Set TURN_SECRET in .env (see .env.example)}
+      TURN_PORT: ${TURN_PORT:-3478}
+      TURN_REALM: ${TURN_REALM:-streamroom}
+      TURN_MIN_PORT: ${TURN_MIN_PORT:-49160}
+      TURN_MAX_PORT: ${TURN_MAX_PORT:-49200}
+      TURN_RELAY_IP: ${TURN_RELAY_IP:-}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
+
+  # Optional: `docker compose --profile public up -d` for automatic HTTPS on $DOMAIN.
+  caddy:
+    image: caddy:2
+    profiles: ["public"]
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      PORT: ${PORT:-8080}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

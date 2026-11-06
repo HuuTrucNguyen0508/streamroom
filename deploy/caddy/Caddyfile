@@ -1,0 +1,5 @@
+# Automatic HTTPS in front of the app. Browsers only allow mic and screen capture on HTTPS.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:{$PORT:8080}
+}
