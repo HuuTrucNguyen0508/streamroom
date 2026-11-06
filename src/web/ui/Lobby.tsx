@@ -205,7 +205,7 @@ export function Lobby({ roomId, relayOnly, onJoin }: { roomId: RoomId; relayOnly
             </div>
           </div>
         )}
-        <p class="field-hint">{mic.kind === "ready" ? "Say something: the bar should move." : " "}</p>
+        <p class="field-hint">{mic.kind === "ready" ? "Say something: the bar should move." : "\u00a0"}</p>
 
         <div class="lobby-actions">
           <button class="btn btn-primary btn-lg" type="submit" disabled={!trimmed || mic.kind !== "ready" || peek?.locked === true}>

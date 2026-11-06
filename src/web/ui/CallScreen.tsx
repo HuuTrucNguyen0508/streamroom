@@ -336,21 +336,23 @@ function Seat({ name, you, host, muted, sharing, connection, level, volume, onVo
           </span>
         )}
       </div>
-      <div class="seat-name">
-        {name}
-        {you && <span class="seat-you"> (you)</span>}
+      <div class="seat-info">
+        <div class="seat-name">
+          {name}
+          {you && <span class="seat-you"> (you)</span>}
+        </div>
+        <div class="seat-meta">
+          {[host && "Host", sharing && "Sharing", muted && "Muted", pending && (connection === "failed" ? "Reconnecting" : "Connecting")]
+            .filter(Boolean)
+            .join(", ") || "\u00a0"}
+        </div>
+        {onVolume && volume !== undefined && (
+          <label class="seat-volume">
+            <span class="sr-only">Volume for {name}</span>
+            <input type="range" min={0} max={100} step={1} value={Math.round(volume * 100)} onInput={(e) => onVolume(Number(e.currentTarget.value) / 100)} />
+          </label>
+        )}
       </div>
-      <div class="seat-meta">
-        {[host && "Host", sharing && "Sharing", muted && "Muted", pending && (connection === "failed" ? "Reconnecting" : "Connecting")]
-          .filter(Boolean)
-          .join(", ") || " "}
-      </div>
-      {onVolume && volume !== undefined && (
-        <label class="seat-volume">
-          <span class="sr-only">Volume for {name}</span>
-          <input type="range" min={0} max={100} step={1} value={Math.round(volume * 100)} onInput={(e) => onVolume(Number(e.currentTarget.value) / 100)} />
-        </label>
-      )}
     </li>
   );
 }
