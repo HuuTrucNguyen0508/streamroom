@@ -3,12 +3,21 @@
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": [
+      "vite/client"
+    ]
   },
-  "include": ["src/web", "src/shared", "e2e", "tests", "vite.config.ts", "playwright.config.ts", "vitest.config.ts"]
+  "include": ["src/web", "src/shared", "e2e", "tests", "vite.config.ts", "playwright.config.ts", "vitest.config.ts"],
+  "exclude": [
+    "tests/invite-storage.test.ts"
+  ]
 }

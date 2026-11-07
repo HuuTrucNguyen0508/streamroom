@@ -6,6 +6,7 @@ services:
     image: streamroom:local
     restart: unless-stopped
     environment:
+      HOST_PASSPHRASE: ${HOST_PASSPHRASE:-}
       PORT: ${PORT:-8080}
       TURN_SECRET: ${TURN_SECRET:?Set TURN_SECRET in .env (see .env.example)}
       # Hostname browsers use for TURN; empty means "the host the page was loaded from".

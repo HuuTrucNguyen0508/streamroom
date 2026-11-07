@@ -163,7 +163,7 @@ export class Call {
 
   private async onOpen(): Promise<void> {
     try {
-      const res = await fetch("/api/ice", { cache: "no-store" });
+      const res = await fetch(`/api/ice?room=${this.roomId}`, { cache: "no-store" });
       const body = (await res.json()) as { iceServers: RTCIceServer[] };
       this.iceServers = body.iceServers;
     } catch (err) {
