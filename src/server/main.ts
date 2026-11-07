@@ -2,7 +2,7 @@
 // All room behavior lives in rooms.ts; this file only moves bytes.
 
 import type { Server, ServerWebSocket } from "bun";
-import { type RoomId, MAX_MESSAGE_BYTES, isRoomId, newRoomId, randomId } from "../shared/protocol.ts";
+import { type RoomId, DEFAULT_SEATS, MAX_MESSAGE_BYTES, isRoomId, newRoomId, parseSeats, randomId } from "../shared/protocol.ts";
 import { Rooms, type ConnId, type Effect } from "./rooms.ts";
 import { SignalingSession, closeCode } from "./signaling.ts";
 import { iceServers } from "./turn.ts";
@@ -33,7 +33,7 @@ interface SocketData {
   heartbeat: ReturnType<typeof setInterval> | undefined;
 }
 
-const rooms = new Rooms();
+const rooms = new Rooms({ capacityOf: (id) => invites.seats(id) });
 const sockets = new Map<ConnId, ServerWebSocket<SocketData>>();
 setInterval(() => invites.prune((id) => rooms.peek(id).members > 0), 60_000).unref();
 
@@ -110,11 +110,8 @@ async function route(req: Request, server: Server<SocketData>): Promise<Response
   const existing = (id: string) => isRoomId(id) && invites.exists(id, rooms.peek(id).members > 0);
   if (req.method === "POST" && ["/api/host-session", "/api/rooms"].includes(path)) {
     if (!sameOrigin(req.headers.get("origin"), url)) return send(403, "Forbidden origin");
-    if (path === "/api/rooms") {
-      if (!host) return send(403, "Host session required");
-      const id = newRoomId(); invites.create(id); return sendJson({ id });
-    }
-    if (!attempts.allow(server.requestIP(req)?.address ?? "unknown")) return send(429, "Too many attempts. Try again in a minute.");
+    if (path === "/api/rooms" && !host) return send(403, "Host session required");
+    if (path === "/api/host-session" && !attempts.allow(server.requestIP(req)?.address ?? "unknown")) return send(429, "Too many attempts. Try again in a minute.");
     let body = "";
     const reader = req.body?.pipeThrough(new TextDecoderStream()).getReader();
     if (reader) {
@@ -125,6 +122,16 @@ async function route(req: Request, server: Server<SocketData>): Promise<Response
         if (body.length > 4096) { await reader.cancel(); return send(413, "Too large"); }
       }
     }
+    if (path === "/api/rooms") {
+      // Optional body: { seats }. No body keeps the default size.
+      let seats: number | null = DEFAULT_SEATS;
+      if (body.trim()) {
+        try { const parsed: unknown = JSON.parse(body); seats = typeof parsed === "object" && parsed !== null && "seats" in parsed ? parseSeats(parsed.seats) : DEFAULT_SEATS; }
+        catch { return send(400, "Invalid JSON"); }
+      }
+      if (seats === null) return send(400, "Seats must be a whole number from 2 to 10.");
+      const id = newRoomId(); invites.create(id, seats); return sendJson({ id, seats });
+    }
     let candidate: unknown;
     try { candidate = JSON.parse(body); } catch { return send(400, "Invalid JSON"); }
     if (typeof candidate !== "object" || candidate === null || !("passphrase" in candidate) || typeof candidate.passphrase !== "string") return send(400, "Passphrase required");
@@ -134,6 +141,8 @@ async function route(req: Request, server: Server<SocketData>): Promise<Response
   if (req.method !== "GET" && req.method !== "HEAD") return send(405, "Method not allowed");
 
   if (path === "/healthz") return sendJson({ ok: true, rooms: rooms.roomCount, sockets: sockets.size });
+  // Lets the start screen skip the passphrase field for a remembered host.
+  if (path === "/api/host-session") return sendJson({ host });
   if (path === "/api/ice") {
     if (!host && !existing(url.searchParams.get("room") ?? "")) return send(403, "Invite or host session required");
     return handleIce(req);
@@ -146,11 +155,12 @@ async function route(req: Request, server: Server<SocketData>): Promise<Response
   }
 
   if (path === "/") {
-    if (!host) return await serveFile("index.html", "no-cache") ?? send(503, "Web app not built");
-    const id = newRoomId(); invites.create(id);
-    // Opening the app makes a fresh room. The 128-bit ID in the link is the invite.
-    const query = url.search; // keep debug flags such as ?relay=1
-    return send(302, "", { Location: `/r/${id}${query}` });
+    // The start screen picks the seat count. "/?seats=N" from a host creates the room directly.
+    const seats = parseSeats(url.searchParams.get("seats"));
+    if (!host || seats === null) return await serveFile("index.html", "no-cache") ?? send(503, "Web app not built");
+    const id = newRoomId(); invites.create(id, seats);
+    url.searchParams.delete("seats"); // keep debug flags such as ?relay=1
+    return send(302, "", { Location: `/r/${id}${url.search}` });
   }
 
   if (path.startsWith("/r/")) return await serveFile("index.html", "no-cache") ?? send(503, "Web app not built");

@@ -4,7 +4,7 @@ import { SignalingSession } from "../src/server/signaling.ts";
 import { isRoomId, MAX_MESSAGE_BYTES, newRoomId } from "../src/shared/protocol.ts";
 
 const room = newRoomId();
-const state = { muted: false, hasMic: true, music: false, share: null };
+const state = { muted: false, hasMic: true, share: null };
 const join = (id = room, resume: string | null = null) => JSON.stringify({ t: "join", room: id, name: "Friend", state, resume });
 
 function setup() {

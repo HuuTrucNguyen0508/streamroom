@@ -3,7 +3,7 @@
 // ("effects"); the caller owns the sockets.
 
 import {
-  MAX_MEMBERS,
+  DEFAULT_SEATS,
   randomId,
   type JoinError,
   type MemberId,
@@ -45,7 +45,10 @@ interface Departed {
 }
 
 export interface RoomsOptions {
+  /** Seats when a room has no recorded size. */
   maxMembers?: number;
+  /** The seat count chosen when the room was created, if known. */
+  capacityOf?: (roomId: RoomId) => number | undefined;
   /** How long a dropped member may come back through a locked door with its resume token. */
   resumeGraceMs?: number;
   now?: () => number;
@@ -59,12 +62,14 @@ export class Rooms {
   private readonly byConn = new Map<ConnId, { room: Room; member: Member }>();
   private readonly departed = new Map<string, Departed>();
   private readonly maxMembers: number;
+  private readonly capacityOf: (roomId: RoomId) => number | undefined;
   private readonly resumeGraceMs: number;
   private readonly now: () => number;
   private readonly makeId: (bytes: number) => string;
 
   constructor(opts: RoomsOptions = {}) {
-    this.maxMembers = opts.maxMembers ?? MAX_MEMBERS;
+    this.maxMembers = opts.maxMembers ?? DEFAULT_SEATS;
+    this.capacityOf = opts.capacityOf ?? (() => undefined);
     this.resumeGraceMs = opts.resumeGraceMs ?? 30_000;
     this.now = opts.now ?? (() => Date.now());
     this.makeId = opts.makeId ?? randomId;
@@ -76,7 +81,11 @@ export class Rooms {
 
   peek(roomId: RoomId): RoomPeek {
     const room = this.rooms.get(roomId);
-    return { members: room?.members.length ?? 0, max: this.maxMembers, locked: room?.locked ?? false };
+    return { members: room?.members.length ?? 0, max: this.seats(roomId), locked: room?.locked ?? false };
+  }
+
+  private seats(roomId: RoomId): number {
+    return this.capacityOf(roomId) ?? this.maxMembers;
   }
 
   info(roomId: RoomId): RoomInfo | null {
@@ -122,7 +131,7 @@ export class Rooms {
     }
 
     if (room) {
-      if (room.members.length >= this.maxMembers) return { ok: false, error: "full", effects };
+      if (room.members.length >= this.seats(roomId)) return { ok: false, error: "full", effects };
       if (room.locked && !mayPassLock) return { ok: false, error: "locked", effects };
     } else {
       room = { id: roomId, members: [], hostId: null, locked: false };

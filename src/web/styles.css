@@ -208,7 +208,37 @@ select {
 
 .seat-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
+  max-width: calc(5 * 46px + 4 * 14px);
+}
+
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stepper-btn {
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.stepper-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.stepper-value {
+  min-width: 2ch;
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--tungsten);
 }
 
 .seat-dot {

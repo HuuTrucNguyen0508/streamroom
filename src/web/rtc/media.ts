@@ -1,27 +1,28 @@
-// Capturing local media: microphone (voice or music mode) and screen.
+// Capturing local media: microphone, screen, and extra audio sources for a share.
 
 import { sortVideoCodecs } from "../../shared/sdp.ts";
 import type { SharePreset } from "./presets.ts";
 
-export function micConstraints(deviceId: string | null, music: boolean): MediaTrackConstraints {
-  const processing = !music;
+/** Voice gets the browser's echo/noise/gain processing; `raw` (a game or system-audio source) gets none, in stereo. */
+export function micConstraints(deviceId: string | null, raw: boolean): MediaTrackConstraints {
+  const processing = !raw;
   return {
     ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     echoCancellation: processing,
     noiseSuppression: processing,
     autoGainControl: processing,
-    channelCount: music ? { ideal: 2 } : { ideal: 1 },
+    channelCount: raw ? { ideal: 2 } : { ideal: 1 },
     sampleRate: { ideal: 48_000 },
   };
 }
 
-export async function getMic(deviceId: string | null, music: boolean): Promise<MediaStream> {
+export async function getMic(deviceId: string | null): Promise<MediaStream> {
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: micConstraints(deviceId, music), video: false });
+    return await navigator.mediaDevices.getUserMedia({ audio: micConstraints(deviceId, false), video: false });
   } catch (err) {
     // The remembered device may be gone; fall back to the default one.
     if (deviceId && err instanceof DOMException && err.name === "OverconstrainedError") {
-      return navigator.mediaDevices.getUserMedia({ audio: micConstraints(null, music), video: false });
+      return navigator.mediaDevices.getUserMedia({ audio: micConstraints(null, false), video: false });
     }
     throw err;
   }
@@ -35,6 +36,8 @@ export async function listMics(): Promise<MediaDeviceInfo[]> {
 export async function getScreen(preset: SharePreset): Promise<MediaStream> {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: {
+      // Open the picker on "Entire screen": the only tab where Chrome offers system audio.
+      ...({ displaySurface: "monitor" } as object),
       width: { max: preset.width },
       height: { max: preset.height },
       frameRate: { ideal: preset.frameRate, max: preset.frameRate },

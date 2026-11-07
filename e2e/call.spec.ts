@@ -75,9 +75,9 @@ test("three friends: voice, simultaneous screen shares, presets, full room, lock
   const cy = await open(browser, "Cy");
   const dee = await open(browser, "Dee");
 
-  // Opening "/" creates a room and redirects to its link.
+  // A host opening "/?seats=3" creates a 3-seat room and lands on its link.
   if (process.env.E2E_HOST_PASSPHRASE) await ada.context.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
-  await ada.page.goto("/");
+  await ada.page.goto("/?seats=3");
   await expect(ada.page).toHaveURL(/\/r\/[A-Za-z0-9_-]{22}$/);
   const roomUrl = ada.page.url();
   console.log(`room: ${roomUrl}`);
@@ -190,13 +190,7 @@ test("three friends: voice, simultaneous screen shares, presets, full room, lock
   await expect(dee.page.getByTestId("stage")).toHaveCount(0);
   await expect(cy.page.getByText("Nobody is sharing.")).toBeVisible();
 
-  // 7. Music mode swaps the mic track in place; voice keeps flowing without renegotiation.
-  await ada.page.getByTestId("music").click();
-  await expect(ada.page.getByTestId("music")).toHaveAttribute("aria-pressed", "true");
-  await expect(ada.page.getByRole("note")).toContainText("Wear headphones");
-  await expectGrowing("Cy still hears Ada in music mode", async () => find(await stats(cy), "Ada", inVoice)?.bytes);
-
-  // 8. The host leaves: the next member in join order (Cy) becomes host and gets the lock control.
+  // 7. The host leaves: the next member in join order (Cy) becomes host and gets the lock control.
   await ada.page.getByTestId("leave").click();
   await expect(cy.page.getByTestId("lock")).toBeVisible();
   await expect(dee.page.getByTestId("lock")).toHaveCount(0);
@@ -211,7 +205,7 @@ test("relay only (?relay=1): media flows through coturn", async ({ browser, requ
   const ada = await open(browser, "Ada");
   const ben = await open(browser, "Ben");
   if (process.env.E2E_HOST_PASSPHRASE) await ada.context.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
-  await ada.page.goto("/?relay=1");
+  await ada.page.goto("/?seats=3&relay=1");
   await expect(ada.page).toHaveURL(/\/r\/[A-Za-z0-9_-]{22}\?relay=1$/);
   const roomUrl = ada.page.url();
   await join(ada, roomUrl);
@@ -240,7 +234,7 @@ function rawJoin(baseURL: string, room: string): Promise<unknown> {
     const ws = new WebSocket(`${baseURL.replace(/^http/, "ws")}/ws?room=${room}`);
     const timer = setTimeout(() => reject(new Error("no answer")), 5000);
     ws.on("open", () =>
-      ws.send(JSON.stringify({ t: "join", room, name: "Intruder", resume: null, state: { muted: false, hasMic: false, music: false, share: null } })),
+      ws.send(JSON.stringify({ t: "join", room, name: "Intruder", resume: null, state: { muted: false, hasMic: false, share: null } })),
     );
     ws.on("message", (data) => {
       clearTimeout(timer);

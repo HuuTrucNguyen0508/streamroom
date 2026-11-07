@@ -42,16 +42,23 @@ describe("invite lifetime", () => {
   it("requires creation and survives an hour without members", () => {
     const invites = new RoomInvites(), id = newRoomId();
     expect(invites.exists(id, false, 0)).toBe(false);
-    invites.create(id, 0);
+    invites.create(id, 3, 0);
     expect(invites.exists(id, false, 3600000)).toBe(true);
     expect(invites.exists(id, false, ROOM_IDLE_MS)).toBe(false);
   });
   it("keeps active rooms and refreshes the idle deadline on departure", () => {
     const invites = new RoomInvites(), id = newRoomId();
-    invites.create(id, 0);
+    invites.create(id, 3, 0);
     expect(invites.exists(id, true, ROOM_IDLE_MS + 1)).toBe(true);
     invites.touch(id, ROOM_IDLE_MS + 1);
     expect(invites.exists(id, false, ROOM_IDLE_MS * 2)).toBe(true);
     expect(invites.exists(id, false, ROOM_IDLE_MS * 2 + 1)).toBe(false);
+  });
+  it("remembers the seat count chosen at creation, through refreshes", () => {
+    const invites = new RoomInvites(), id = newRoomId();
+    expect(invites.seats(id)).toBeUndefined();
+    invites.create(id, 7, 0);
+    invites.touch(id, 1000);
+    expect(invites.seats(id)).toBe(7);
   });
 });

@@ -107,3 +107,60 @@ test("video-only share warns; selected input sends screen audio and switches mid
     await expect(picker).toHaveCount(0);
   } finally { await host.close(); await guest.close(); }
 });
+
+test("host picks the seat count and the room enforces it", async ({ browser, baseURL }) => {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const origin = { Origin: baseURL! };
+  try {
+    await ctx.request.post(`${baseURL}/api/host-session`, { headers: origin, data: { passphrase } });
+    await page.goto("/");
+    // A remembered host sees the picker, not the passphrase field.
+    await expect(page.getByTestId("seats")).toHaveText("3");
+    await expect(page.getByLabel("Host passphrase")).toHaveCount(0);
+    const fewer = page.getByRole("button", { name: "Fewer seats" }), more = page.getByRole("button", { name: "More seats" });
+    await fewer.click();
+    await expect(page.getByTestId("seats")).toHaveText("2");
+    await expect(fewer).toBeDisabled();
+    for (let i = 0; i < 8; i++) await more.click();
+    await expect(page.getByTestId("seats")).toHaveText("10");
+    await expect(more).toBeDisabled();
+    await expect(page.locator(".seat-dot")).toHaveCount(10);
+    await page.screenshot({ path: "docs/screenshots/seats.png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: "docs/screenshots/seats-mobile.png" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (let i = 0; i < 4; i++) await fewer.click();
+    await page.getByRole("button", { name: "Start a room" }).click();
+    await expect(page).toHaveURL(/\/r\/[\w-]{22}$/);
+    const id = page.url().split("/r/")[1]!;
+    expect(await (await ctx.request.get(`${baseURL}/api/rooms/${id}`)).json()).toMatchObject({ members: 0, max: 6 });
+    await page.getByLabel("Your name").fill("Host");
+    await page.getByRole("button", { name: "Join without mic" }).click();
+    await expect(page.getByTestId("seat-count")).toHaveText("1 of 6 seats");
+    // The choice is remembered for the next room.
+    const next = await ctx.newPage();
+    await next.goto("/");
+    await expect(next.getByTestId("seats")).toHaveText("6");
+
+    // The API rejects out-of-range sizes, and a 2-seat room turns a third person away.
+    expect((await ctx.request.post(`${baseURL}/api/rooms`, { headers: origin, data: { seats: 11 } })).status()).toBe(400);
+    expect((await ctx.request.post(`${baseURL}/api/rooms`, { headers: origin, data: { seats: 1 } })).status()).toBe(400);
+    const small = (await (await ctx.request.post(`${baseURL}/api/rooms`, { headers: origin, data: { seats: 2 } })).json()) as { id: string };
+    const sockets = [await seat(baseURL!, small.id), await seat(baseURL!, small.id)];
+    expect(sockets.map((s) => s.reply.t)).toEqual(["joined", "joined"]);
+    const third = await seat(baseURL!, small.id);
+    expect(third.reply).toMatchObject({ t: "error", code: "full" });
+    for (const s of [...sockets, third]) s.ws.close();
+  } finally { await ctx.close(); }
+});
+
+function seat(baseURL: string, room: string): Promise<{ ws: WebSocket; reply: { t: string; code?: string } }> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`${baseURL.replace(/^http/, "ws")}/ws?room=${room}`);
+    const timer = setTimeout(() => reject(new Error("no answer")), 5000);
+    ws.on("open", () => ws.send(JSON.stringify({ t: "join", room, name: "Seat", resume: null, state: { muted: false, hasMic: false, share: null } })));
+    ws.once("message", (data) => { clearTimeout(timer); resolve({ ws, reply: JSON.parse(String(data)) }); });
+    ws.on("error", reject);
+  });
+}

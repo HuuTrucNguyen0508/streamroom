@@ -12,7 +12,9 @@ async function create(request: import("@playwright/test").APIRequestContext, bas
 }
 
 test("Worker routes and origin protection", async ({ request, baseURL }) => {
-  const response = await request.get("/?relay=1", { maxRedirects: 0 });
+  // "/" is the start screen (seat picker); "/?seats=N" from a host creates the room and redirects.
+  expect((await request.get("/", { maxRedirects: 0 })).status()).toBe(200);
+  const response = await request.get("/?seats=3&relay=1", { maxRedirects: 0 });
   expect(response.status()).toBe(302);
   expect(response.headers().location).toMatch(/^\/r\/[\w-]{22}\?relay=1$/);
   const room = await create(request, baseURL!);
@@ -39,10 +41,10 @@ test("Durable Object rejects wrong-room joins and oversized messages, then clean
   });
   try {
     const rejected = receive();
-    socket.send(JSON.stringify({ t: "join", room: newRoomId(), name: "Friend", state: { muted: false, hasMic: true, music: false, share: null } }));
+    socket.send(JSON.stringify({ t: "join", room: newRoomId(), name: "Friend", state: { muted: false, hasMic: true, share: null } }));
     expect(await rejected).toMatchObject({ t: "error", code: "bad_request" });
     const joined = receive();
-    socket.send(JSON.stringify({ t: "join", room, name: "Friend", state: { muted: false, hasMic: true, music: false, share: null } }));
+    socket.send(JSON.stringify({ t: "join", room, name: "Friend", state: { muted: false, hasMic: true, share: null } }));
     expect(await joined).toMatchObject({ t: "joined" });
     expect((await (await request.get(`/api/rooms/${room}`)).json()).members).toBe(1);
     const closed = new Promise<number>((resolve) => socket.once("close", resolve));

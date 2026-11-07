@@ -75,7 +75,7 @@ export class Call {
   private audioSource = savedAudioSource();
   private noDisplayAudio = false;
   private audioRevision = 0;
-  private state: MemberState = { muted: false, hasMic: false, music: false, share: null };
+  private state: MemberState = { muted: false, hasMic: false, share: null };
   private micDeviceId: string | null = null;
   private phase: Phase = "idle";
   private selfId: MemberId | null = null;
@@ -334,9 +334,9 @@ export class Call {
     this.broadcastState();
   }
 
-  /** Swap the microphone (device or processing mode) without renegotiating. */
-  private async replaceMic(deviceId: string | null, music: boolean): Promise<void> {
-    const next = await getMic(deviceId, music);
+  /** Swap the microphone device without renegotiating. */
+  private async replaceMic(deviceId: string | null): Promise<void> {
+    const next = await getMic(deviceId);
     const track = next.getAudioTracks()[0] ?? null;
     if (!this.mic) {
       // Joined without a mic: start sending one now (this renegotiates).
@@ -348,20 +348,16 @@ export class Call {
       this.setMic(next);
     }
     this.micDeviceId = track?.getSettings().deviceId ?? deviceId;
-    this.state = { ...this.state, hasMic: true, music };
+    this.state = { ...this.state, hasMic: true };
     this.broadcastState();
   }
 
   switchMic(deviceId: string): Promise<void> {
-    return this.replaceMic(deviceId, this.state.music);
+    return this.replaceMic(deviceId);
   }
 
   enableMic(): Promise<void> {
-    return this.replaceMic(this.micDeviceId, this.state.music);
-  }
-
-  setMusicMode(music: boolean): Promise<void> {
-    return this.replaceMic(this.micDeviceId, music);
+    return this.replaceMic(this.micDeviceId);
   }
 
   clearNotice(): void { this.notice = null; this.emit(); }

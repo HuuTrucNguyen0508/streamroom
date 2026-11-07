@@ -4,7 +4,7 @@ import type { MemberState, RoomId, ServerMessage } from "../src/shared/protocol.
 
 const ROOM = "AAAAAAAAAAAAAAAAAAAAAA" as RoomId;
 const OTHER = "BBBBBBBBBBBBBBBBBBBBBB" as RoomId;
-const state: MemberState = { muted: false, hasMic: true, music: false, share: null };
+const state: MemberState = { muted: false, hasMic: true, share: null };
 
 function setup(now = { t: 0 }) {
   let n = 0;
@@ -50,6 +50,18 @@ describe("Rooms", () => {
     const d = rooms.join("d", ROOM, "D", state, null);
     expect(d).toEqual({ ok: false, error: "full", effects: [] });
     expect(rooms.peek(ROOM).members).toBe(3);
+  });
+
+  it("uses each room's own seat count, defaulting to three", () => {
+    const seats = new Map<RoomId, number>([[ROOM, 2], [OTHER, 10]]);
+    const rooms = new Rooms({ capacityOf: (id) => seats.get(id) });
+    joinOk(rooms, "a");
+    joinOk(rooms, "b");
+    expect(rooms.join("c", ROOM, "C", state, null)).toMatchObject({ ok: false, error: "full" });
+    expect(rooms.peek(ROOM)).toEqual({ members: 2, max: 2, locked: false });
+    for (let i = 0; i < 10; i++) joinOk(rooms, `o${i}`, OTHER);
+    expect(rooms.join("o10", OTHER, "O", state, null)).toMatchObject({ ok: false, error: "full" });
+    expect(rooms.peek("CCCCCCCCCCCCCCCCCCCCCC" as RoomId).max).toBe(3);
   });
 
   it("lets only the host lock, and a locked room rejects new joiners", () => {

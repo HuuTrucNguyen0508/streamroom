@@ -58,7 +58,7 @@ Host sessions use a 90-day HMAC-signed HttpOnly, Secure, SameSite=Lax cookie key
 
 HTTP routes remain `/`, `/r/<id>`, `/api/rooms/<id>`, `/api/ice`, and `/healthz`. `/healthz` reports readiness rather than global room counts, since room state is distributed. Signaling uses `/ws?room=<id>` with the same message protocol. The join room must match the routing ID. The Bun server accepts that query too; older clients without it cannot connect to the Worker. Both transports share the pure room model, parser, and message dispatch. The Worker checks WebSocket origins against the request host.
 
-The three-person mesh and media presets are unchanged. Every sharer uploads one copy per viewer. Credentials expire after 12 hours; automatic credential renewal is still absent, so longer relay calls need a rejoin. Real OS screen/system audio and external-network relay calls require separate testing. Existing Docker rooms cannot move into Cloudflare; let them finish before changing the hostname.
+The mesh (2 to 10 seats, chosen by the host and stored with each room's Durable Object) and media presets are unchanged. Every sharer uploads one copy per viewer. Credentials expire after 12 hours; automatic credential renewal is still absent, so longer relay calls need a rejoin. Real OS screen/system audio and external-network relay calls require separate testing. Existing Docker rooms cannot move into Cloudflare; let them finish before changing the hostname.
 
 ## Costs and limits
 

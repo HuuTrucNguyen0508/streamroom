@@ -1,5 +1,5 @@
-import { useMemo, useState } from "preact/hooks";
-import { isRoomId, type RoomId } from "../../shared/protocol.ts";
+import { useEffect, useMemo, useState } from "preact/hooks";
+import { DEFAULT_SEATS, MAX_SEATS, MIN_SEATS, isRoomId, parseSeats, type RoomId } from "../../shared/protocol.ts";
 import { Call } from "../rtc/call.ts";
 import { CallScreen } from "./CallScreen.tsx";
 import { useCallView } from "./hooks.ts";
@@ -41,7 +41,7 @@ function InCall({ call }: { call: Call }) {
   const view = useCallView(call);
   if (view.phase === "full") {
     return (
-      <Notice title="This room is full." body="Streamroom keeps rooms to three people so everyone gets full quality. Ask someone inside to make space, or start a room of your own.">
+      <Notice title="This room is full." body="Every seat is taken. Ask someone inside to make space, or start a room of your own.">
         <button class="btn" onClick={() => location.reload()}>Try again</button>
         <a class="btn btn-primary" href="/">Start a new room</a>
       </Notice>
@@ -81,16 +81,50 @@ export function Notice({ title, body, children }: { title: string; body: string;
   );
 }
 
+const SEATS_KEY = "streamroom.seats";
+
+function savedSeats(): number {
+  try {
+    return parseSeats(localStorage.getItem(SEATS_KEY)) ?? DEFAULT_SEATS;
+  } catch {
+    return DEFAULT_SEATS;
+  }
+}
+
 function HostGate() {
   const [passphrase, setPassphrase] = useState("");
+  const [seats, setSeats] = useState(savedSeats);
+  // null while checking: a remembered host skips the passphrase field.
+  const [host, setHost] = useState<boolean | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/host-session")
+      .then((r) => (r.ok ? (r.json() as Promise<{ host?: unknown }>) : { host: false }))
+      .then((b) => setHost(b.host === true))
+      .catch(() => setHost(false));
+  }, []);
+
+  const pick = (n: number) => {
+    const next = Math.min(MAX_SEATS, Math.max(MIN_SEATS, n));
+    setSeats(next);
+    try {
+      localStorage.setItem(SEATS_KEY, String(next));
+    } catch {
+      // Not remembered; fine.
+    }
+  };
+
   const enter = async () => {
     setBusy(true); setError("");
     try {
-      const login = await fetch("/api/host-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ passphrase }) });
-      if (!login.ok) { setError(await login.text()); return; }
-      const room = await fetch("/api/rooms", { method: "POST" });
+      if (!host) {
+        const login = await fetch("/api/host-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ passphrase }) });
+        if (!login.ok) { setError(await login.text()); return; }
+      }
+      const room = await fetch("/api/rooms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ seats }) });
+      if (room.status === 403) { setHost(false); setError("Enter the host passphrase again."); return; }
       if (!room.ok) throw new Error("Room creation failed");
       const body: unknown = await room.json();
       if (typeof body !== "object" || body === null || !("id" in body) || !isRoomId(body.id)) throw new Error("Invalid room");
@@ -98,15 +132,28 @@ function HostGate() {
     } catch { setError("Couldn't start a room. Try again."); }
     finally { setBusy(false); }
   };
+
+  const needsPassphrase = host === false;
   return <main class="lobby" data-screen="host">
     <section class="lobby-intro"><p class="wordmark">Streamroom</p><h1 class="lobby-title">Settle in.</h1>
-      <div class="seat-row" aria-hidden="true"><span class="seat-dot" /><span class="seat-dot" /><span class="seat-dot" /></div>
-      <p class="lobby-lede">Enter the host passphrase to start a room. Joining friends? Open their invite link instead.</p></section>
+      <div class="seat-row" aria-hidden="true">{Array.from({ length: seats }, (_, i) => <span key={i} class="seat-dot" />)}</div>
+      <p class="lobby-lede">{needsPassphrase ? "Enter the host passphrase to start a room. Joining friends? Open their invite link instead." : "Choose how many seats, then send the link to your friends."}</p></section>
     <form class="lobby-panel" onSubmit={(e) => { e.preventDefault(); void enter(); }}>
-      <label class="field"><span class="field-label">Host passphrase</span><input class="input" type="password" autocomplete="current-password" required value={passphrase} onInput={(e) => setPassphrase(e.currentTarget.value)} /></label>
+      {needsPassphrase && <label class="field"><span class="field-label">Host passphrase</span><input class="input" type="password" autocomplete="current-password" required value={passphrase} onInput={(e) => setPassphrase(e.currentTarget.value)} /></label>}
+      <div class="field">
+        <span class="field-label" id="seats-label">Seats</span>
+        <div class="stepper" role="group" aria-labelledby="seats-label">
+          <button type="button" class="btn stepper-btn" aria-label="Fewer seats" disabled={seats <= MIN_SEATS} onClick={() => pick(seats - 1)}>−</button>
+          <output class="stepper-value" data-testid="seats" aria-live="polite">{seats}</output>
+          <button type="button" class="btn stepper-btn" aria-label="More seats" disabled={seats >= MAX_SEATS} onClick={() => pick(seats + 1)}>+</button>
+        </div>
+      </div>
       {error && <p class="field-error" role="alert">{error}</p>}
-      <p class="field-hint">This browser remembers you for 90 days.</p>
-      <button class="btn btn-primary btn-lg" disabled={busy || !passphrase}>{busy ? "Opening room…" : "Start a room"}</button>
+      <p class="field-hint">
+        {seats > 4 ? `Whoever shares their screen sends a copy to each viewer: ${seats - 1} copies here, so they need fast upload.` : "Up to 10 seats. "}
+        {needsPassphrase && "This browser remembers you for 90 days."}
+      </p>
+      <button class="btn btn-primary btn-lg" disabled={busy || host === null || (needsPassphrase && !passphrase)}>{busy ? "Opening room…" : "Start a room"}</button>
     </form>
   </main>;
 }

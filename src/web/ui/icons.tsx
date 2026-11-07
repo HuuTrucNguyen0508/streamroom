@@ -32,13 +32,6 @@ export const StopScreenIcon = (p: P) => (
     <path d="M9.5 7.5l5 5M14.5 7.5l-5 5M8.5 20h7" />
   </Svg>
 );
-export const MusicIcon = (p: P) => (
-  <Svg {...p}>
-    <path d="M9 18V5.5l11-2V16" />
-    <circle cx="6.5" cy="18" r="2.5" />
-    <circle cx="17.5" cy="16" r="2.5" />
-  </Svg>
-);
 export const LinkIcon = (p: P) => (
   <Svg {...p}>
     <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />

@@ -1,6 +1,6 @@
 # Streamroom
 
-A temporary room for screen sharing and voice with up to three people. Open a link, choose a name, and invite two friends. Multiple people can share at once. Invite links expire after 24 hours without a call. Cloudflare stores invites durably; Bun keeps them in memory until restart. There are no accounts or recordings.
+A temporary room for screen sharing and voice. The host picks the number of seats, from 2 to 10 (3 by default), when starting a room; open the link, choose a name, and invite your friends. Calls are peer-to-peer, so whoever shares their screen uploads one copy per viewer: big rooms need fast upload. Multiple people can share at once. Invite links expire after 24 hours without a call. Cloudflare stores invites durably; Bun keeps them in memory until restart. There are no accounts or recordings.
 
 ## Quick start
 
@@ -58,7 +58,7 @@ Video prefers AV1, then VP9, with browser codec fallback. These presets request 
 
 Each sharer uploads a separate copy to each viewer, even through TURN. Allow extra bandwidth for transport overhead and up to 128 kbps per audio track per viewer. Multiple simultaneous shares add their own upload costs. The Stats panel shows actual codec, resolution, frame rate, bitrate, and connection route.
 
-Voice uses Opus. Music mode requests stereo and disables echo cancellation and noise suppression. Wear headphones in that mode.
+Voice uses Opus with the browser's echo cancellation and noise suppression. Screen-share audio is sent in stereo with no voice processing.
 
 ## Browser limits
 
@@ -128,4 +128,4 @@ Setup is idempotent and doesn't change the default sink. Teardown checks recorde
 
 On Windows, share **Entire screen** and tick **Also share system audio**. For a browser tab on any supported OS, tick **Also share tab audio**. On macOS Chrome 141 or later, tick system audio when available. A missing or disconnected input produces an error so you can choose another source.
 
-For authenticated headless testing on an isolated Bun or Wrangler port, set the same throwaway `HOST_PASSPHRASE` on the server and `E2E_HOST_PASSPHRASE` on Playwright. `e2e/host-audio.spec.ts` covers login, invite-first joining, HTTP/WS/ICE rejection and screen-audio switching. Existing three-friend and Cloudflare tests also accept that test environment variable. Keep `.dev.vars` ignored and remove it after local testing.
+For authenticated headless testing on an isolated Bun or Wrangler port, set the same throwaway `HOST_PASSPHRASE` on the server and `E2E_HOST_PASSPHRASE` on Playwright. `e2e/host-audio.spec.ts` covers login, the seat picker and room-size limits, invite-first joining, HTTP/WS/ICE rejection and screen-audio switching. Existing three-friend and Cloudflare tests also accept that test environment variable. Keep `.dev.vars` ignored and remove it after local testing.

@@ -13,7 +13,6 @@ import {
   LockIcon,
   MicIcon,
   MicOffIcon,
-  MusicIcon,
   ScreenIcon,
   StopScreenIcon,
   UnlockIcon,
@@ -42,6 +41,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const shares = sharesOf(view);
   const stage = shares.find((s) => s.id === stageId) ?? shares[0] ?? null;
   const seatsTaken = view.members.length + 1;
+  const seatsTotal = useRoomSeats(call.roomId);
 
   // Newest remote share takes the stage when it appears.
   const shareKey = shares.map((s) => s.id).join(",");
@@ -92,7 +92,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         <div class="rail-left">
           <span class="wordmark">Streamroom</span>
           <span class="rail-seats" data-testid="seat-count">
-            {seatsTaken} of 3 seats
+            {seatsTaken} of {seatsTotal} seats
           </span>
           {view.locked && (
             <span class="badge" data-testid="locked-badge">
@@ -174,13 +174,6 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </ul>
       </main>
 
-      {view.self.music && (
-        <p class="hint" role="note">
-          Music mode is on: echo cancellation and noise suppression are off, and your mic sends in stereo. Wear headphones so friends don't hear
-          themselves.
-        </p>
-      )}
-
       {view.localScreen && <ShareAudio call={call} view={view} onError={(message) => setError(message)} />}
       <footer class="dock">
         <div class="dock-group">
@@ -249,16 +242,6 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
               )}
             </div>
           )}
-          <button
-            class={`btn btn-dock${view.self.music ? " is-live" : ""}`}
-            aria-pressed={view.self.music}
-            data-testid="music"
-            disabled={!view.self.hasMic}
-            onClick={() => void run(call.setMusicMode(!view.self.music), "Couldn't switch the microphone mode.")}
-          >
-            <MusicIcon />
-            <span class="label">Music mode</span>
-          </button>
         </div>
 
         <div class="dock-group">
@@ -406,4 +389,18 @@ function ShareAudio({ call, view, onError }: { call: Call; view: CallView; onErr
       </select>
     </label>
   </section>;
+}
+
+/** The room's seat count, chosen by the host at creation. */
+function useRoomSeats(roomId: string): number {
+  const [seats, setSeats] = useState(3);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/rooms/${roomId}`)
+      .then((r) => (r.ok ? (r.json() as Promise<{ max?: unknown }>) : null))
+      .then((p) => { if (alive && typeof p?.max === "number") setSeats(p.max); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [roomId]);
+  return seats;
 }
