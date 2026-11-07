@@ -1,8 +1,24 @@
 # Streamroom
 
-A temporary room for screen sharing and voice with up to three people. Open a link, choose a name, and invite two friends. Multiple people can share at once. Rooms live in memory and disappear when empty or when the server restarts. There are no accounts or recordings.
+A temporary room for screen sharing and voice with up to three people. Open a link, choose a name, and invite two friends. Multiple people can share at once. Rooms live in memory and disappear when empty or when their server restarts. There are no accounts or recordings.
 
 ## Quick start
+
+### Cloudflare
+
+Host the app without leaving your PC running. Use a free Cloudflare account, Workers Static Assets, Durable Objects, and Realtime TURN:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm exec wrangler login
+pnpm exec wrangler secret put TURN_KEY_ID
+pnpm exec wrangler secret put TURN_KEY_API_TOKEN
+pnpm cf:deploy
+```
+
+Create the TURN key and API token in the Cloudflare dashboard under **Realtime > TURN**. Open `https://streamroom.<account-subdomain>.workers.dev`. See the [deploy guide](docs/cloudflare.md) for noninteractive authentication, local testing, costs, and limits.
+
+### Docker
 
 Use Docker Compose on Linux. coturn uses host networking.
 
@@ -71,8 +87,8 @@ E2E_BASE_URL=http://localhost:8080 pnpm test:e2e:screenshots
 
 Use 8088 here if using this machine's `.env`. Tests use fake media, real peer connections, and real coturn, including a forced relay call. Screenshots go to `docs/screenshots/`. They do not open a visible browser.
 
-CI runs the frozen install, typecheck, unit tests, production build, and Docker build. End-to-end tests stay local because the host-network TURN path has not been validated on GitHub's Ubuntu runners. Configure the `check` job as a required branch-protection check when publishing the repository.
+CI runs the frozen install, Node/web/Worker typechecks, unit tests, production build, Wrangler deployment dry-run, and Docker build. End-to-end tests stay local because the host-network TURN path has not been validated on GitHub's Ubuntu runners. Configure the `check` job as a required branch-protection check when publishing the repository.
 
-See [the Cloudflare migration plan](docs/cloudflare.md) for a possible hosted signaling and TURN deployment.
+For local Cloudflare development, run `pnpm cf:dev --port 8787`. Run the same headless suite against that port. The relay test skips explicitly without TURN credentials. See the [Cloudflare deploy guide](docs/cloudflare.md).
 
 The [pnpm 12.17.0 release](https://github.com/pnpm/pnpm/releases/tag/v12.17.0) exists, and [pnpm/action-setup v6 supports pnpm 12](https://github.com/pnpm/action-setup). CI uses that exact pnpm version and Node 26, matching the Docker image.
