@@ -40,7 +40,15 @@ export async function getScreen(preset: SharePreset): Promise<MediaStream> {
       frameRate: { ideal: preset.frameRate, max: preset.frameRate },
     },
     // System/tab audio when the browser offers it. Turn off processing so music survives.
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } },
+    // restrictOwnAudio: system-audio capture skips this page's own playback (the call), so friends
+    // don't hear themselves echoed back. Chrome-based browsers on Windows/macOS; ignored elsewhere.
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: { ideal: 2 },
+      ...({ restrictOwnAudio: true } as object),
+    },
     // Chrome hints; unknown keys are ignored elsewhere.
     ...({ systemAudio: "include", selfBrowserSurface: "exclude", surfaceSwitching: "include" } as object),
   } as DisplayMediaStreamOptions);
