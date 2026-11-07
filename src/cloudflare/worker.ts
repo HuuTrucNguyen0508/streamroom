@@ -1,4 +1,4 @@
-import { DEFAULT_SEATS, isRoomId, newRoomId, parseSeats, randomId } from "../shared/protocol.ts";
+import { DEFAULT_SEATS, PING_INTERVAL_MS, SILENT_DROP_MS, isRoomId, newRoomId, parseSeats, randomId } from "../shared/protocol.ts";
 import { Rooms, type Effect } from "../server/rooms.ts";
 import { SignalingSession, closeCode } from "../server/signaling.ts";
 import { cloudflareIce, type TurnSecrets } from "./turn.ts";
@@ -125,6 +125,9 @@ export class Room {
     await this.ctx.storage.setAlarm(expires);
   }
   private readonly sockets = new Map<string, WebSocket>();
+  /** When each connection last sent anything; clients ping every PING_INTERVAL_MS. */
+  private readonly lastHeard = new Map<string, number>();
+  private sweeper: ReturnType<typeof setInterval> | null = null;
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -148,16 +151,45 @@ export class Room {
     const conn = randomId(12);
     const session = new SignalingSession(this.rooms, conn, room);
     this.sockets.set(conn, socket);
+    this.lastHeard.set(conn, Date.now());
+    this.sweeper ??= setInterval(() => this.sweep(), PING_INTERVAL_MS / 2);
     const cleanup = () => {
       if (this.sockets.get(conn) !== socket) return;
       this.sockets.delete(conn);
+      this.forget(conn);
       this.ctx.waitUntil(this.touch());
       this.apply(this.rooms.leave(conn));
     };
-    socket.addEventListener("message", (event) => this.apply(session.receive(event.data)));
+    socket.addEventListener("message", (event) => {
+      this.lastHeard.set(conn, Date.now());
+      this.apply(session.receive(event.data));
+    });
+    this.closers.set(conn, () => { cleanup(); try { socket.close(4000, "silent"); } catch { /* Already gone. */ } });
     socket.addEventListener("close", cleanup);
     socket.addEventListener("error", () => { cleanup(); socket.close(1011, "socket error"); });
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private readonly closers = new Map<string, () => void>();
+
+  /**
+   * Workers can't send WebSocket pings, so a socket whose network vanished (VPN switch) never closes
+   * here. Free the seat of any connection that stopped pinging; its close event may never come.
+   */
+  private sweep(): void {
+    const cutoff = Date.now() - SILENT_DROP_MS;
+    for (const [conn, heard] of this.lastHeard) {
+      if (heard >= cutoff) continue;
+      const close = this.closers.get(conn);
+      this.forget(conn);
+      close?.();
+    }
+  }
+
+  private forget(conn: string): void {
+    this.lastHeard.delete(conn);
+    this.closers.delete(conn);
+    if (this.sockets.size === 0 && this.sweeper) { clearInterval(this.sweeper); this.sweeper = null; }
   }
 
   private apply(effects: Effect[]): void {
@@ -166,6 +198,7 @@ export class Room {
       if (!socket) continue;
       if (effect.kind === "close") {
         this.sockets.delete(effect.to);
+        this.forget(effect.to);
         socket.close(closeCode(effect.reason), effect.reason);
         // Replaced connections were already removed by Rooms.join().
         this.apply(this.rooms.leave(effect.to));
