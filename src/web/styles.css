@@ -513,6 +513,7 @@ select.input {
     0 60px 160px -40px rgb(244 184 96 / 0.18);
   overflow: hidden;
   display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
 }
 
