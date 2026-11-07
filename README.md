@@ -58,7 +58,7 @@ Video prefers AV1, then VP9, with browser codec fallback. These presets request 
 
 Each sharer uploads a separate copy to each viewer, even through TURN. Allow extra bandwidth for transport overhead and up to 128 kbps per audio track per viewer. Multiple simultaneous shares add their own upload costs. The Stats panel shows actual codec, resolution, frame rate, bitrate, and connection route.
 
-Voice uses Opus. Music mode requests stereo and disables echo cancellation and noise suppression. Wear headphones in that mode.
+Voice uses Opus with the browser's echo cancellation and noise suppression. Screen-share audio is sent in stereo with no voice processing.
 
 ## Browser limits
 

@@ -52,7 +52,7 @@ export function Lobby({ roomId, relayOnly, onJoin }: { roomId: RoomId; relayOnly
     let cancelled = false;
     let stream: MediaStream | null = null;
     setMic({ kind: "asking" });
-    getMic(deviceId, false)
+    getMic(deviceId)
       .then(async (s) => {
         if (cancelled) return s.getTracks().forEach((t) => t.stop());
         stream = s;

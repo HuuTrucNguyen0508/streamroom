@@ -190,13 +190,7 @@ test("three friends: voice, simultaneous screen shares, presets, full room, lock
   await expect(dee.page.getByTestId("stage")).toHaveCount(0);
   await expect(cy.page.getByText("Nobody is sharing.")).toBeVisible();
 
-  // 7. Music mode swaps the mic track in place; voice keeps flowing without renegotiation.
-  await ada.page.getByTestId("music").click();
-  await expect(ada.page.getByTestId("music")).toHaveAttribute("aria-pressed", "true");
-  await expect(ada.page.getByRole("note")).toContainText("Wear headphones");
-  await expectGrowing("Cy still hears Ada in music mode", async () => find(await stats(cy), "Ada", inVoice)?.bytes);
-
-  // 8. The host leaves: the next member in join order (Cy) becomes host and gets the lock control.
+  // 7. The host leaves: the next member in join order (Cy) becomes host and gets the lock control.
   await ada.page.getByTestId("leave").click();
   await expect(cy.page.getByTestId("lock")).toBeVisible();
   await expect(dee.page.getByTestId("lock")).toHaveCount(0);
@@ -240,7 +234,7 @@ function rawJoin(baseURL: string, room: string): Promise<unknown> {
     const ws = new WebSocket(`${baseURL.replace(/^http/, "ws")}/ws?room=${room}`);
     const timer = setTimeout(() => reject(new Error("no answer")), 5000);
     ws.on("open", () =>
-      ws.send(JSON.stringify({ t: "join", room, name: "Intruder", resume: null, state: { muted: false, hasMic: false, music: false, share: null } })),
+      ws.send(JSON.stringify({ t: "join", room, name: "Intruder", resume: null, state: { muted: false, hasMic: false, share: null } })),
     );
     ws.on("message", (data) => {
       clearTimeout(timer);

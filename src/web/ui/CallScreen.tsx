@@ -13,7 +13,6 @@ import {
   LockIcon,
   MicIcon,
   MicOffIcon,
-  MusicIcon,
   ScreenIcon,
   StopScreenIcon,
   UnlockIcon,
@@ -174,13 +173,6 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </ul>
       </main>
 
-      {view.self.music && (
-        <p class="hint" role="note">
-          Music mode is on: echo cancellation and noise suppression are off, and your mic sends in stereo. Wear headphones so friends don't hear
-          themselves.
-        </p>
-      )}
-
       {view.localScreen && <ShareAudio call={call} view={view} onError={(message) => setError(message)} />}
       <footer class="dock">
         <div class="dock-group">
@@ -249,16 +241,6 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
               )}
             </div>
           )}
-          <button
-            class={`btn btn-dock${view.self.music ? " is-live" : ""}`}
-            aria-pressed={view.self.music}
-            data-testid="music"
-            disabled={!view.self.hasMic}
-            onClick={() => void run(call.setMusicMode(!view.self.music), "Couldn't switch the microphone mode.")}
-          >
-            <MusicIcon />
-            <span class="label">Music mode</span>
-          </button>
         </div>
 
         <div class="dock-group">

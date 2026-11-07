@@ -39,10 +39,10 @@ test("Durable Object rejects wrong-room joins and oversized messages, then clean
   });
   try {
     const rejected = receive();
-    socket.send(JSON.stringify({ t: "join", room: newRoomId(), name: "Friend", state: { muted: false, hasMic: true, music: false, share: null } }));
+    socket.send(JSON.stringify({ t: "join", room: newRoomId(), name: "Friend", state: { muted: false, hasMic: true, share: null } }));
     expect(await rejected).toMatchObject({ t: "error", code: "bad_request" });
     const joined = receive();
-    socket.send(JSON.stringify({ t: "join", room, name: "Friend", state: { muted: false, hasMic: true, music: false, share: null } }));
+    socket.send(JSON.stringify({ t: "join", room, name: "Friend", state: { muted: false, hasMic: true, share: null } }));
     expect(await joined).toMatchObject({ t: "joined" });
     expect((await (await request.get(`/api/rooms/${room}`)).json()).members).toBe(1);
     const closed = new Promise<number>((resolve) => socket.once("close", resolve));

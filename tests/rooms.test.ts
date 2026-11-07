@@ -4,7 +4,7 @@ import type { MemberState, RoomId, ServerMessage } from "../src/shared/protocol.
 
 const ROOM = "AAAAAAAAAAAAAAAAAAAAAA" as RoomId;
 const OTHER = "BBBBBBBBBBBBBBBBBBBBBB" as RoomId;
-const state: MemberState = { muted: false, hasMic: true, music: false, share: null };
+const state: MemberState = { muted: false, hasMic: true, share: null };
 
 function setup(now = { t: 0 }) {
   let n = 0;

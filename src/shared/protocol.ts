@@ -40,7 +40,6 @@ export type PresetId = (typeof PRESET_IDS)[number];
 export interface MemberState {
   muted: boolean;
   hasMic: boolean;
-  music: boolean;
   /** MediaStream id of the member's screen share (matches the remote stream id), or null. */
   share: { streamId: string; preset: PresetId; hasAudio: boolean } | null;
 }
@@ -111,8 +110,9 @@ export function cleanName(raw: unknown): string | null {
 
 function parseState(v: unknown): MemberState | null {
   if (!isObject(v)) return null;
-  const { muted, hasMic, music, share } = v;
-  if (typeof muted !== "boolean" || typeof hasMic !== "boolean" || typeof music !== "boolean") return null;
+  // Older clients also send `music`; extra fields are ignored.
+  const { muted, hasMic, share } = v;
+  if (typeof muted !== "boolean" || typeof hasMic !== "boolean") return null;
   let parsedShare: MemberState["share"] = null;
   if (share !== null && share !== undefined) {
     if (!isObject(share)) return null;
@@ -122,7 +122,7 @@ function parseState(v: unknown): MemberState | null {
     if (typeof hasAudio !== "boolean") return null;
     parsedShare = { streamId, preset: preset as PresetId, hasAudio };
   }
-  return { muted, hasMic, music, share: parsedShare };
+  return { muted, hasMic, share: parsedShare };
 }
 
 const DESCRIPTION_TYPES = new Set(["offer", "answer", "rollback", "pranswer"]);

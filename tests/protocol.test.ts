@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MAX_MESSAGE_BYTES, cleanName, isRoomId, newRoomId, parseClientMessage } from "../src/shared/protocol.ts";
 
-const state = { muted: false, hasMic: true, music: false, share: null };
+const state = { muted: false, hasMic: true, share: null };
 const room = "AAAAAAAAAAAAAAAAAAAAAA";
 
 describe("room ids", () => {
