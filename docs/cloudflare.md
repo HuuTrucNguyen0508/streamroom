@@ -4,7 +4,7 @@ Streamroom runs on a Worker with Static Assets, one SQLite-backed Durable Object
 
 ## Deploy
 
-Use Node 26 and pnpm 12.17.0. From the repository root:
+Use Node 26 for Wrangler and pnpm 12.17.0. From the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -46,17 +46,17 @@ E2E_CLOUDFLARE=1 E2E_BASE_URL=http://localhost:8787 pnpm exec playwright test e2
 
 The browser tests are headless. The Cloudflare transport checks also verify HTTP routes, origin rejection, room-ID binding, oversized-frame closure, and empty-room cleanup. The relay test explicitly skips if `/api/ice` returns no TURN servers. Without secrets, the three-person test uses local direct peer connections and does not prove Cloudflare TURN. To test real relay media, put `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` in an untracked `.dev.vars`, restart Wrangler, and run the relay test. Repeat both tests against the deployed HTTPS URL before moving friends over. Stop Wrangler with Ctrl-C when finished. The dev script disables Wrangler telemetry and loading Docker's `.env`.
 
-`pnpm cf:check` validates the deployment bundle without logging in, deploying, or requiring secrets. CI runs it after the production build. `pnpm typecheck` includes the Worker; `pnpm cf:typecheck` runs just that check. Unit tests exercise TURN response validation and the shared message handler used by Node and the DO, including capacity, locking, resume replacement, host succession, relay targeting, byte limits, and rate limits.
+`pnpm cf:check` validates the deployment bundle without logging in, deploying, or requiring secrets. CI runs it after the production build. `pnpm typecheck` includes the Worker; `pnpm cf:typecheck` runs just that check. Unit tests exercise TURN response validation and the shared message handler used by Bun and the DO, including capacity, locking, resume replacement, host succession, relay targeting, byte limits, and rate limits.
 
 ## Room lifetime and compatibility
 
-Invite existence and idle expiry live in each room's Durable Object storage, independently of membership. They survive object recreation and deployments. Creation writes a 24-hour expiry and sets an alarm. Active sockets keep the invite alive; the last departure refreshes the 24-hour deadline. The alarm deletes idle expired records, and HTTP/WS routes reject expired records even before alarm delivery. Node uses the same lifetime with an in-memory invite registry, which resets on restart.
+Invite existence and idle expiry live in each room's Durable Object storage, independently of membership. They survive object recreation and deployments. Creation writes a 24-hour expiry and sets an alarm. Active sockets keep the invite alive; the last departure refreshes the 24-hour deadline. The alarm deletes idle expired records, and HTTP/WS routes reject expired records even before alarm delivery. Bun uses the same lifetime with an in-memory invite registry, which resets on restart.
 
 Sockets use `accept()`, without hibernation. Membership, locks, host order and resume tokens remain in memory as before, so deployments can interrupt active calls. An invite can be opened again afterward until it expires.
 
 Host sessions use a 90-day HMAC-signed HttpOnly, Secure, SameSite=Lax cookie keyed by `HOST_PASSPHRASE`. Login checks exact Origin and uses a best-effort per-isolate IP throttle. Rotating the secret invalidates host cookies. Without it, startup requests log an open-access warning and creation/ICE remain open for local development. Add `HOST_PASSPHRASE` to ignored `.dev.vars` for local auth tests, and delete that file when finished.
 
-HTTP routes remain `/`, `/r/<id>`, `/api/rooms/<id>`, `/api/ice`, and `/healthz`. `/healthz` reports readiness rather than global room counts, since room state is distributed. Signaling uses `/ws?room=<id>` with the same message protocol. The join room must match the routing ID. The Node server accepts that query too; older clients without it cannot connect to the Worker. Both transports share the pure room model, parser, and message dispatch. The Worker checks WebSocket origins against the request host.
+HTTP routes remain `/`, `/r/<id>`, `/api/rooms/<id>`, `/api/ice`, and `/healthz`. `/healthz` reports readiness rather than global room counts, since room state is distributed. Signaling uses `/ws?room=<id>` with the same message protocol. The join room must match the routing ID. The Bun server accepts that query too; older clients without it cannot connect to the Worker. Both transports share the pure room model, parser, and message dispatch. The Worker checks WebSocket origins against the request host.
 
 The three-person mesh and media presets are unchanged. Every sharer uploads one copy per viewer. Credentials expire after 12 hours; automatic credential renewal is still absent, so longer relay calls need a rejoin. Real OS screen/system audio and external-network relay calls require separate testing. Existing Docker rooms cannot move into Cloudflare; let them finish before changing the hostname.
 

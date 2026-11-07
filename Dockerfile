@@ -16,17 +16,15 @@ COPY tsconfig*.json vite.config.ts ./
 COPY src ./src
 RUN pnpm build
 
-FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --prod
-
-FROM node:26-slim AS runtime
+# Bun executes the server TypeScript directly; it has no runtime package dependencies.
+FROM oven/bun:1.4.4-slim AS runtime
 ENV NODE_ENV=production PORT=8080
 WORKDIR /app
-COPY --from=deps --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/dist ./dist
-COPY --chown=node:node package.json ./
-USER node
+COPY --from=build --chown=bun:bun /app/dist/web ./dist/web
+COPY --from=build --chown=bun:bun /app/src/server ./src/server
+COPY --from=build --chown=bun:bun /app/src/shared ./src/shared
+COPY --chown=bun:bun package.json ./
+USER bun
 EXPOSE 8080
-HEALTHCHECK --interval=15s --timeout=3s --start-period=5s CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
-CMD ["node", "dist/node/server/main.js"]
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s CMD ["bun", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+CMD ["bun", "src/server/main.ts"]

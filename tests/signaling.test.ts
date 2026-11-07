@@ -14,7 +14,7 @@ function setup() {
   return { rooms, a, b };
 }
 
-describe("shared Durable Object / Node message handling", () => {
+describe("shared Durable Object / Bun message handling", () => {
   it("rejects a join for another room before changing membership", () => {
     const { rooms, a } = setup();
     expect(a.receive(join(newRoomId()))).toMatchObject([{ kind: "send", msg: { code: "bad_request" } }]);

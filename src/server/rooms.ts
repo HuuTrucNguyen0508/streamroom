@@ -1,4 +1,4 @@
-// Pure, transport-agnostic room logic. No Node APIs: this module is meant to move into a
+// Pure, transport-agnostic room logic. No Bun APIs: this module is meant to move into a
 // Cloudflare Durable Object unchanged. Every operation returns the messages to deliver
 // ("effects"); the caller owns the sockets.
 
