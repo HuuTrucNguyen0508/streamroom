@@ -10,6 +10,8 @@ export interface Meter {
 export class AudioEngine {
   readonly ctx = new AudioContext({ latencyHint: "interactive" });
   private readonly players = new Map<string, HTMLAudioElement>();
+  /** Output device for every player; "" is the system default. */
+  private sinkId = "";
 
   resume(): void {
     if (this.ctx.state === "suspended") void this.ctx.resume().catch(() => undefined);
@@ -48,10 +50,18 @@ export class AudioEngine {
       el = new Audio();
       el.autoplay = true;
       this.players.set(key, el);
+      if (this.sinkId) void applySink(el, this.sinkId).catch(() => undefined); // Gone device: system default.
     }
     if (el.srcObject !== stream) el.srcObject = stream;
     el.volume = volume;
     void el.play().catch(() => undefined);
+  }
+
+  /** Play the call on this output device ("" = system default). Rejects if the device can't be used. */
+  async setSink(sinkId: string): Promise<void> {
+    const players = [...this.players.values()];
+    await Promise.all(players.map((el) => applySink(el, sinkId)));
+    this.sinkId = sinkId;
   }
 
   setVolume(keyPrefix: string, volume: number): void {
@@ -71,4 +81,9 @@ export class AudioEngine {
     this.stop("");
     void this.ctx.close().catch(() => undefined);
   }
+}
+
+async function applySink(el: HTMLAudioElement, sinkId: string): Promise<void> {
+  const media = el as HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
+  if (typeof media.setSinkId === "function") await media.setSinkId(sinkId);
 }

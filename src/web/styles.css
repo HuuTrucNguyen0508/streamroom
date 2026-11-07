@@ -1009,6 +1009,7 @@ select.input {
 
 .share-audio { grid-area: share-audio; padding: 12px 24px; background: var(--ink-raised); border-top: 1px solid var(--seam); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .share-audio-warning { margin: 0; color: var(--tungsten); font-size: 14px; max-width: 75ch; }
-.share-audio-field { display: grid; gap: 6px; min-width: 210px; max-width: 100%; }
+.share-audio-fields { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; }
+.share-audio-field { display: grid; gap: 6px; min-width: 210px; max-width: min(100%, 20rem); }
 .share-audio-field .input { width: 100%; }
-@media (max-width: 640px) { .share-audio { grid-area: share-audio; padding: 12px 16px; flex-direction: column; align-items: stretch; } }
+@media (max-width: 640px) { .share-audio { grid-area: share-audio; padding: 12px 16px; flex-direction: column; align-items: stretch; } .share-audio-fields { flex-direction: column; margin-left: 0; } }

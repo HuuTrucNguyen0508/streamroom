@@ -33,6 +33,37 @@ export async function listMics(): Promise<MediaDeviceInfo[]> {
   return devices.filter((d) => d.kind === "audioinput" && d.deviceId !== "");
 }
 
+/** Browsers that can play a page's audio on a chosen output device (Chrome, Edge, Vivaldi...). */
+export function canPickSpeaker(): boolean {
+  return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+}
+
+/** Output devices, without Chrome's "default"/"communications" aliases (those are listed separately). */
+export async function listSpeakers(): Promise<{ defaultLabel: string; devices: MediaDeviceInfo[] }> {
+  const outputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput" && d.deviceId !== "");
+  const fallback = outputs.find((d) => d.deviceId === "default");
+  return {
+    defaultLabel: fallback?.label.replace(/^Default - /, "") ?? "",
+    devices: outputs.filter((d) => d.deviceId !== "default" && d.deviceId !== "communications"),
+  };
+}
+
+/**
+ * Audio enhancers and mixers that take every app's sound and play it again from their own program.
+ * System-audio capture can only leave out the browser's own sound, so a call played through one of
+ * these gets captured and friends hear themselves.
+ */
+export function replayerName(label: string): string | null {
+  const known: [RegExp, string][] = [
+    [/fxsound/i, "FxSound"],
+    [/voicemeeter|vb-audio/i, "Voicemeeter"],
+    [/sonar/i, "SteelSeries Sonar"],
+    [/nahimic/i, "Nahimic"],
+    [/boom ?3d/i, "Boom 3D"],
+  ];
+  return known.find(([re]) => re.test(label))?.[1] ?? null;
+}
+
 export async function getScreen(preset: SharePreset): Promise<MediaStream> {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: {

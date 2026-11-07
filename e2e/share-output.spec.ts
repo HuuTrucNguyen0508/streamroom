@@ -1,0 +1,85 @@
+import { expect, test } from "@playwright/test";
+const passphrase = process.env.E2E_HOST_PASSPHRASE ?? "streamroom-test-only";
+
+// A Windows friend shares "Entire screen" with system audio while their default output is FxSound.
+// FxSound replays the call from its own program, so the capture can't leave it out: the viewer
+// hears themselves. The sharer gets a warning and can play the call straight on their headset.
+// The viewer sits on an ultrawide window, where a 16:9 share used to overflow the stage and be cropped.
+test("ultrawide viewer sees the whole share; FxSound sharer is warned and can move the call to a headset", async ({ browser, baseURL }) => {
+  const host = await browser.newContext({ viewport: { width: 3440, height: 1300 } }), guest = await browser.newContext();
+  try {
+    await host.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL! }, data: { passphrase } });
+    const { id } = await (await host.request.post(`${baseURL}/api/rooms`, { headers: { Origin: baseURL! } })).json();
+    const viewer = await host.newPage(), sharer = await guest.newPage();
+    await sharer.addInitScript(() => {
+      navigator.mediaDevices.getDisplayMedia = async () => {
+        const canvas = document.createElement("canvas"); canvas.width = 2560; canvas.height = 1440;
+        const ctx = canvas.getContext("2d")!;
+        setInterval(() => {
+          ctx.fillStyle = `hsl(${Date.now() % 360},70%,50%)`; ctx.fillRect(0, 0, 2560, 1440);
+          ctx.fillStyle = "#fff"; ctx.fillRect(0, 1380, 2560, 60); // The taskbar the crop used to hide.
+        }, 40);
+        const audio = new AudioContext(), tone = audio.createOscillator(), out = audio.createMediaStreamDestination();
+        tone.connect(out); tone.start();
+        return new MediaStream([...canvas.captureStream(25).getVideoTracks(), ...out.stream.getAudioTracks()]);
+      };
+      const real = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
+      const fake = (deviceId: string, label: string) => ({ deviceId, label, kind: "audiooutput", groupId: deviceId, toJSON() { return this; } }) as MediaDeviceInfo;
+      navigator.mediaDevices.enumerateDevices = async () => [
+        ...(await real()).filter((d) => d.kind !== "audiooutput"),
+        fake("default", "Default - FxSound Speakers (FxSound Audio Enhancer)"),
+        fake("communications", "Communications - Headset Earphone (Arctis 7 Chat)"),
+        fake("fxsound", "FxSound Speakers (FxSound Audio Enhancer)"),
+        fake("arctis-chat", "Headset Earphone (Arctis 7 Chat)"),
+      ];
+      // Fake device ids can't reach the real setSinkId; record where each player was sent instead.
+      const w = window as unknown as { __sinks: string[] };
+      w.__sinks = [];
+      HTMLMediaElement.prototype.setSinkId = async function (sinkId: string) { w.__sinks.push(sinkId); };
+    });
+    for (const [page, name] of [[viewer, "Viewer"], [sharer, "Sharer"]] as const) {
+      await page.goto(`/r/${id}`); await page.getByLabel("Your name").fill(name);
+      await expect(page.getByRole("button", { name: "Join room", exact: true })).toBeEnabled();
+      await page.getByRole("button", { name: "Join room", exact: true }).click();
+      await expect(page.locator('[data-phase="in-call"]')).toBeVisible();
+    }
+    await sharer.getByTestId("share").click(); await sharer.getByTestId("preset-motion").click();
+
+    // Ultrawide viewer: the whole 16:9 frame fits inside the stage (letterboxed, not cropped).
+    const video = viewer.locator(".stage-video");
+    await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.videoWidth)).toBe(2560);
+    const box = await viewer.evaluate(() => {
+      const v = document.querySelector<HTMLVideoElement>(".stage-video")!, f = document.querySelector(".stage-frame")!;
+      const vr = v.getBoundingClientRect(), fr = f.getBoundingClientRect();
+      const scale = Math.min(vr.width / v.videoWidth, vr.height / v.videoHeight);
+      const shownHeight = v.videoHeight * scale, top = vr.top + (vr.height - shownHeight) / 2;
+      return { frameTop: fr.top, frameBottom: fr.bottom, shownTop: top, shownBottom: top + shownHeight };
+    });
+    expect(box.shownTop).toBeGreaterThanOrEqual(box.frameTop - 1);
+    expect(box.shownBottom).toBeLessThanOrEqual(box.frameBottom + 1);
+    await viewer.screenshot({ path: "test-results/ultrawide-viewer.png" });
+
+    // FxSound sharer: warned, then moves the call to the headset.
+    await expect(sharer.getByTestId("replayer-echo")).toContainText("FxSound");
+    const speaker = sharer.getByTestId("speaker");
+    await expect(speaker.locator("option").first()).toHaveText("System default: FxSound Speakers (FxSound Audio Enhancer)");
+    await expect(speaker.locator("option")).toHaveText(["System default: FxSound Speakers (FxSound Audio Enhancer)", "FxSound Speakers (FxSound Audio Enhancer)", "Headset Earphone (Arctis 7 Chat)"]);
+    await sharer.screenshot({ path: "test-results/fxsound-warning.png" });
+    await speaker.selectOption("arctis-chat");
+    await expect(sharer.getByTestId("replayer-echo")).toHaveCount(0);
+    expect(await sharer.evaluate(() => (window as unknown as { __sinks: string[] }).__sinks)).toContain("arctis-chat");
+    expect(await sharer.evaluate(() => localStorage.getItem("streamroom:speaker"))).toBe("arctis-chat");
+    // Picking FxSound itself by name warns again.
+    await speaker.selectOption("fxsound");
+    await expect(sharer.getByTestId("replayer-echo")).toBeVisible();
+    await speaker.selectOption("arctis-chat");
+    await sharer.screenshot({ path: "test-results/fxsound-fixed.png" });
+
+    // The choice survives a reload: new players go straight to the headset.
+    await sharer.reload();
+    await sharer.getByLabel("Your name").fill("Sharer");
+    await sharer.getByRole("button", { name: "Join room", exact: true }).click();
+    await expect(sharer.locator('[data-phase="in-call"]')).toBeVisible();
+    await expect.poll(() => sharer.evaluate(() => (window as unknown as { __sinks: string[] }).__sinks)).toContain("arctis-chat");
+  } finally { await host.close(); await guest.close(); }
+});

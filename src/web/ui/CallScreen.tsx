@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { PRESET_IDS, type MemberId, type PresetId } from "../../shared/protocol.ts";
 import type { Call, CallView } from "../rtc/call.ts";
-import { listMics } from "../rtc/media.ts";
+import { canPickSpeaker, listMics, listSpeakers, replayerName } from "../rtc/media.ts";
 import { PRESETS } from "../rtc/presets.ts";
 import { initials, useLevel } from "./hooks.ts";
 import {
@@ -367,27 +367,50 @@ function MicMenu({ open, onToggle, current, onPick }: { open: boolean; onToggle:
 
 function ShareAudio({ call, view, onError }: { call: Call; view: CallView; onError: (message: string) => void }) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [speakers, setSpeakers] = useState<{ defaultLabel: string; devices: MediaDeviceInfo[] }>({ defaultLabel: "", devices: [] });
   const [busy, setBusy] = useState(false);
+  const pickSpeaker = canPickSpeaker();
   useEffect(() => {
-    const refresh = () => { void listMics().then(setDevices).catch(() => undefined); };
+    const refresh = () => {
+      void listMics().then(setDevices).catch(() => undefined);
+      if (pickSpeaker) void listSpeakers().then(setSpeakers).catch(() => undefined);
+    };
     refresh(); navigator.mediaDevices.addEventListener("devicechange", refresh);
     return () => navigator.mediaDevices.removeEventListener("devicechange", refresh);
-  }, []);
+  }, [pickSpeaker]);
   const platform = navigator.userAgent;
   const tip = /Windows/.test(platform) ? 'On Windows, share "Entire screen" and tick "Also share system audio".'
     : /Linux/.test(platform) ? 'On Linux, choose a game monitor or virtual input in Audio source.'
     : /Mac/.test(platform) ? 'On macOS with Chrome 141 or later, tick system audio.' : 'Choose an audio input in Audio source.';
+  // System audio captures everything except this browser's own sound. A call played through an
+  // enhancer like FxSound comes back out of FxSound's program instead, so it gets captured too.
+  const sharingSystemAudio = view.audioSource === "browser" && !view.noDisplayAudio;
+  const playingOn = view.speakerId ? speakers.devices.find((d) => d.deviceId === view.speakerId)?.label ?? "" : speakers.defaultLabel;
+  const replayer = sharingSystemAudio ? replayerName(playingOn) : null;
   return <section class="share-audio" aria-label="Screen share audio">
     {view.noDisplayAudio && view.audioSource === "browser" && <p class="share-audio-warning" role="status" data-testid="no-sound">Your screen has no audio. {tip} You can also share a browser tab and tick "Also share tab audio".</p>}
-    <label class="share-audio-field"><span class="field-label">Audio source</span>
-      <select class="input" aria-label="Audio source" value={view.audioSource} disabled={busy} onChange={(e) => {
-        setBusy(true); void call.switchShareAudio(e.currentTarget.value).catch(() => onError("Couldn't open that audio source. Check its permission or choose another input.")).finally(() => setBusy(false));
-      }}>
-        <option value="browser">Browser audio{view.noDisplayAudio ? " (not captured)" : ""}</option>
-        {devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Audio input ${i + 1}`}</option>)}
-        <option value="none">None</option>
-      </select>
-    </label>
+    {replayer && <p class="share-audio-warning" role="status" data-testid="replayer-echo">The call plays through {replayer}, so your friends hear themselves in your shared sound. In "Call plays on", pick your headset or speakers.</p>}
+    <div class="share-audio-fields">
+      {pickSpeaker && sharingSystemAudio && (
+        <label class="share-audio-field"><span class="field-label">Call plays on</span>
+          <select class="input" aria-label="Call plays on" data-testid="speaker" value={view.speakerId} disabled={busy} onChange={(e) => {
+            setBusy(true); void call.setSpeaker(e.currentTarget.value).catch(() => onError("Couldn't play the call on that device. Choose another one.")).finally(() => setBusy(false));
+          }}>
+            <option value="">{speakers.defaultLabel ? `System default: ${speakers.defaultLabel}` : "System default"}</option>
+            {speakers.devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Speaker ${i + 1}`}</option>)}
+          </select>
+        </label>
+      )}
+      <label class="share-audio-field"><span class="field-label">Audio source</span>
+        <select class="input" aria-label="Audio source" value={view.audioSource} disabled={busy} onChange={(e) => {
+          setBusy(true); void call.switchShareAudio(e.currentTarget.value).catch(() => onError("Couldn't open that audio source. Check its permission or choose another input.")).finally(() => setBusy(false));
+        }}>
+          <option value="browser">Browser audio{view.noDisplayAudio ? " (not captured)" : ""}</option>
+          {devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Audio input ${i + 1}`}</option>)}
+          <option value="none">None</option>
+        </select>
+      </label>
+    </div>
   </section>;
 }
 
