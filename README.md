@@ -1,6 +1,6 @@
 # Streamroom
 
-A temporary room for screen sharing and voice with up to three people. Open a link, choose a name, and invite two friends. Multiple people can share at once. Rooms live in memory and disappear when empty or when their server restarts. There are no accounts or recordings.
+A temporary room for screen sharing and voice with up to three people. Open a link, choose a name, and invite two friends. Multiple people can share at once. Invite links expire after 24 hours without a call. Cloudflare stores invites durably; Node keeps them in memory until restart. There are no accounts or recordings.
 
 ## Quick start
 
@@ -11,6 +11,7 @@ Host the app without leaving your PC running. Use a free Cloudflare account, Wor
 ```sh
 pnpm install --frozen-lockfile
 pnpm exec wrangler login
+pnpm exec wrangler secret put HOST_PASSPHRASE
 pnpm exec wrangler secret put TURN_KEY_ID
 pnpm exec wrangler secret put TURN_KEY_API_TOKEN
 pnpm cf:deploy
@@ -24,6 +25,7 @@ Use Docker Compose on Linux. coturn uses host networking.
 
 ```sh
 cp .env.example .env
+# Set HOST_PASSPHRASE to a long private passphrase.
 # Set TURN_SECRET in .env to the output of: openssl rand -base64 32
 docker compose up -d --build
 ```
@@ -60,7 +62,7 @@ Voice uses Opus. Music mode requests stereo and disables echo cancellation and n
 
 ## Browser limits
 
-Use a desktop Chromium browser for screen capture. Chrome on Windows can share system audio. On Linux and macOS, Chrome shares tab audio rather than whole-system audio. Select a browser tab and enable its audio option in the picker. Available sources depend on the browser and operating system. Mobile browsers can join voice and view shares, but screen capture support varies.
+Use a desktop Chromium browser for screen capture. Chrome on Windows can share system audio. On Linux, Chrome can capture tab audio but cannot capture whole-system audio through the screen picker. On macOS with Chrome 141 or later, enable system audio when offered. Select a browser tab and enable its audio option in the picker. Available sources depend on the browser and operating system. Mobile browsers can join voice and view shares, but screen capture support varies.
 
 Media travels between peers, directly or through TURN. The signaling server forwards negotiation messages. Links are bearer access, and the app does not provide identity verification. TURN credentials expire after 12 hours by default; long-running connections have no automatic credential renewal.
 
@@ -92,3 +94,38 @@ CI runs the frozen install, Node/web/Worker typechecks, unit tests, production b
 For local Cloudflare development, run `pnpm cf:dev --port 8787`. Run the same headless suite against that port. The relay test skips explicitly without TURN credentials. See the [Cloudflare deploy guide](docs/cloudflare.md).
 
 The [pnpm 12.17.0 release](https://github.com/pnpm/pnpm/releases/tag/v12.17.0) exists, and [pnpm/action-setup v6 supports pnpm 12](https://github.com/pnpm/action-setup). CI uses that exact pnpm version and Node 26, matching the Docker image.
+
+## Host access and invite lifetime
+
+Set `HOST_PASSPHRASE` as a Worker secret or a Node environment variable. Docker Compose passes it from `.env`. Use a long, private passphrase. With no passphrase, the app logs a warning and allows open room creation and ICE access for development.
+
+The base link asks for the passphrase, then creates an invite on the server. Friends open that invite without a passphrase, even before its creator joins. The first person to join still controls the call, with the existing hand-off order. Each idle invite lasts 24 hours; an active call keeps it alive and departure refreshes the deadline. Unknown and expired invites cannot join or mint TURN credentials.
+
+The `sr_host` cookie lasts 90 days and uses an HMAC-SHA256 signature keyed by the passphrase, HttpOnly, Secure and SameSite=Lax. HTTP localhost omits Secure. Changing the passphrase invalidates existing host sessions. Host login and explicit room creation require a same-origin POST. Login allows eight attempts per IP per minute, best effort per Node process or Worker isolate. An authenticated host can also start another room by opening `/`.
+
+Guests request ICE with `/api/ice?room=<invite-id>`; a host cookie also authorizes `/api/ice`. Invite links remain bearer access, so anyone with a live invite can request credentials. This protects against base-link visitors, not invite leaks. TURN credentials retain their existing 12-hour lifetime.
+
+## Sharing game audio on Linux
+
+Chrome on Linux doesn't capture a game's system audio through `getDisplayMedia`. During a share, use **Audio source** to choose a normal audio input, Browser audio, or None. Inputs send stereo with echo cancellation, noise suppression and automatic gain control off. Switching sources keeps the same screen-audio path, volume control and stats label. The choice is remembered in this browser and capture stops with the share. The app warns when Browser audio has no captured audio track.
+
+To make a game-only input with PulseAudio or PipeWire's PulseAudio compatibility server, install `pactl` and run:
+
+```sh
+scripts/linux-game-audio.sh setup
+scripts/linux-game-audio.sh status
+```
+
+In pavucontrol's Playback tab or KDE audio settings, route **only the game** to **Streamroom Game**. In Streamroom's Audio source, select **Streamroom Game Audio**. The script loops the game back to the default output selected during setup, so you still hear it. Leave your browser and friends' voices on the normal output. Routing the browser into this game sink would capture friends' voices and cause an echo. Headphones remain the best choice.
+
+When finished:
+
+```sh
+scripts/linux-game-audio.sh teardown
+```
+
+Setup is idempotent and doesn't change the default sink. Teardown checks recorded module IDs and arguments before removing only the modules it created. State is stored under `$XDG_RUNTIME_DIR/streamroom-game-audio` with a per-user fallback in `/tmp`. After an audio-server restart, run teardown before setup again.
+
+On Windows, share **Entire screen** and tick **Also share system audio**. For a browser tab on any supported OS, tick **Also share tab audio**. On macOS Chrome 141 or later, tick system audio when available. A missing or disconnected input produces an error so you can choose another source.
+
+For authenticated headless testing on an isolated Node or Wrangler port, set the same throwaway `HOST_PASSPHRASE` on the server and `E2E_HOST_PASSPHRASE` on Playwright. `e2e/host-audio.spec.ts` covers login, invite-first joining, HTTP/WS/ICE rejection and screen-audio switching. Existing three-friend and Cloudflare tests also accept that test environment variable. Keep `.dev.vars` ignored and remove it after local testing.

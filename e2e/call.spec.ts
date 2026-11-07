@@ -76,6 +76,7 @@ test("three friends: voice, simultaneous screen shares, presets, full room, lock
   const dee = await open(browser, "Dee");
 
   // Opening "/" creates a room and redirects to its link.
+  if (process.env.E2E_HOST_PASSPHRASE) await ada.context.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
   await ada.page.goto("/");
   await expect(ada.page).toHaveURL(/\/r\/[A-Za-z0-9_-]{22}$/);
   const roomUrl = ada.page.url();
@@ -203,11 +204,13 @@ test("three friends: voice, simultaneous screen shares, presets, full room, lock
   for (const f of [ada, ben, cy, dee]) await f.context.close();
 });
 
-test("relay only (?relay=1): media flows through coturn", async ({ browser, request }) => {
+test("relay only (?relay=1): media flows through coturn", async ({ browser, request, baseURL }) => {
+  if (process.env.E2E_HOST_PASSPHRASE) await request.post("/api/host-session", { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
   const ice = await (await request.get("/api/ice")).json();
   test.skip(!ice.iceServers.some((s: { urls: string[] }) => s.urls.some((url) => /^turns?:/.test(url))), "Relay test requires TURN credentials; STUN-only development cannot relay.");
   const ada = await open(browser, "Ada");
   const ben = await open(browser, "Ben");
+  if (process.env.E2E_HOST_PASSPHRASE) await ada.context.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
   await ada.page.goto("/?relay=1");
   await expect(ada.page).toHaveURL(/\/r\/[A-Za-z0-9_-]{22}\?relay=1$/);
   const roomUrl = ada.page.url();

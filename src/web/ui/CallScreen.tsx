@@ -126,10 +126,10 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
           {view.phase === "reconnecting" ? "Connection lost. Reconnecting to the room." : "Connecting to the room."}
         </div>
       )}
-      {error && (
+      {(error || view.notice) && (
         <div class="banner banner-error" role="alert">
-          {error}
-          <button class="btn btn-ghost btn-sm" onClick={() => setError(null)}>
+          {error || view.notice}
+          <button class="btn btn-ghost btn-sm" onClick={() => { setError(null); call.clearNotice(); }}>
             Dismiss
           </button>
         </div>
@@ -143,7 +143,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
             <p class="empty-title">{view.members.length === 0 ? "You're the first one here." : "Nobody is sharing."}</p>
             <p class="empty-body">
               {view.members.length === 0
-                ? "Copy the invite link and send it to up to two friends. The room disappears when everyone leaves."
+                ? "Copy the invite link and send it to up to two friends. The invite stays open for 24 hours after everyone leaves."
                 : "Share a screen and it lands here for everyone."}
             </p>
           </div>
@@ -181,6 +181,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </p>
       )}
 
+      {view.localScreen && <ShareAudio call={call} view={view} onError={(message) => setError(message)} />}
       <footer class="dock">
         <div class="dock-group">
           {view.self.hasMic ? (
@@ -379,4 +380,30 @@ function MicMenu({ open, onToggle, current, onPick }: { open: boolean; onToggle:
       )}
     </div>
   );
+}
+
+function ShareAudio({ call, view, onError }: { call: Call; view: CallView; onError: (message: string) => void }) {
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const refresh = () => { void listMics().then(setDevices).catch(() => undefined); };
+    refresh(); navigator.mediaDevices.addEventListener("devicechange", refresh);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", refresh);
+  }, []);
+  const platform = navigator.userAgent;
+  const tip = /Windows/.test(platform) ? 'On Windows, share "Entire screen" and tick "Also share system audio".'
+    : /Linux/.test(platform) ? 'On Linux, choose a game monitor or virtual input in Audio source.'
+    : /Mac/.test(platform) ? 'On macOS with Chrome 141 or later, tick system audio.' : 'Choose an audio input in Audio source.';
+  return <section class="share-audio" aria-label="Screen share audio">
+    {view.noDisplayAudio && view.audioSource === "browser" && <p class="share-audio-warning" role="status" data-testid="no-sound">Your screen has no audio. {tip} You can also share a browser tab and tick "Also share tab audio".</p>}
+    <label class="share-audio-field"><span class="field-label">Audio source</span>
+      <select class="input" aria-label="Audio source" value={view.audioSource} disabled={busy} onChange={(e) => {
+        setBusy(true); void call.switchShareAudio(e.currentTarget.value).catch(() => onError("Couldn't open that audio source. Check its permission or choose another input.")).finally(() => setBusy(false));
+      }}>
+        <option value="browser">Browser audio{view.noDisplayAudio ? " (not captured)" : ""}</option>
+        {devices.map((d, i) => <option key={d.deviceId} value={d.deviceId}>{d.label || `Audio input ${i + 1}`}</option>)}
+        <option value="none">None</option>
+      </select>
+    </label>
+  </section>;
 }
