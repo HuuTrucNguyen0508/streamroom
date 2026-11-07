@@ -75,9 +75,9 @@ test("three friends: voice, simultaneous screen shares, presets, full room, lock
   const cy = await open(browser, "Cy");
   const dee = await open(browser, "Dee");
 
-  // Opening "/" creates a room and redirects to its link.
+  // A host opening "/?seats=3" creates a 3-seat room and lands on its link.
   if (process.env.E2E_HOST_PASSPHRASE) await ada.context.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
-  await ada.page.goto("/");
+  await ada.page.goto("/?seats=3");
   await expect(ada.page).toHaveURL(/\/r\/[A-Za-z0-9_-]{22}$/);
   const roomUrl = ada.page.url();
   console.log(`room: ${roomUrl}`);
@@ -205,7 +205,7 @@ test("relay only (?relay=1): media flows through coturn", async ({ browser, requ
   const ada = await open(browser, "Ada");
   const ben = await open(browser, "Ben");
   if (process.env.E2E_HOST_PASSPHRASE) await ada.context.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
-  await ada.page.goto("/?relay=1");
+  await ada.page.goto("/?seats=3&relay=1");
   await expect(ada.page).toHaveURL(/\/r\/[A-Za-z0-9_-]{22}\?relay=1$/);
   const roomUrl = ada.page.url();
   await join(ada, roomUrl);

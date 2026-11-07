@@ -1,7 +1,16 @@
 // Signaling protocol shared by the server and the browser.
 // Everything that crosses the wire is parsed here; the rest of the code trusts these types.
 
-export const MAX_MEMBERS = 3;
+/** Seats per room: the host picks a number when creating it. Mesh calls get heavy past ~10. */
+export const DEFAULT_SEATS = 3;
+export const MIN_SEATS = 2;
+export const MAX_SEATS = 10;
+
+/** A seat count from a query string or JSON body, or null when absent or out of range. */
+export function parseSeats(v: unknown): number | null {
+  const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
+  return typeof n === "number" && Number.isInteger(n) && n >= MIN_SEATS && n <= MAX_SEATS ? n : null;
+}
 export const MAX_MESSAGE_BYTES = 64 * 1024;
 export const MAX_NAME_LENGTH = 32;
 

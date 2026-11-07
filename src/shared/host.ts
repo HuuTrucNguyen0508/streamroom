@@ -1,4 +1,4 @@
-import type { RoomId } from "./protocol.ts";
+import { DEFAULT_SEATS, type RoomId } from "./protocol.ts";
 const encoder = new TextEncoder();
 export const HOST_MAX_AGE = 90 * 24 * 3600;
 export const ROOM_IDLE_MS = 24 * 3600 * 1000;
@@ -48,11 +48,15 @@ export class HostAttempts {
   }
 }
 export class RoomInvites {
-  private readonly records = new Map<RoomId, number>();
-  create(id: RoomId, now = Date.now()): void { this.records.set(id, now + ROOM_IDLE_MS); }
-  touch(id: RoomId, now = Date.now()): void { if (this.records.has(id)) this.create(id, now); }
+  private readonly records = new Map<RoomId, { expires: number; seats: number }>();
+  create(id: RoomId, seats = DEFAULT_SEATS, now = Date.now()): void { this.records.set(id, { expires: now + ROOM_IDLE_MS, seats }); }
+  touch(id: RoomId, now = Date.now()): void {
+    const record = this.records.get(id);
+    if (record) record.expires = now + ROOM_IDLE_MS;
+  }
+  seats(id: RoomId): number | undefined { return this.records.get(id)?.seats; }
   exists(id: RoomId, active = false, now = Date.now()): boolean {
-    const expires = this.records.get(id);
+    const expires = this.records.get(id)?.expires;
     if (expires === undefined) return false;
     if (active || expires > now) return true;
     this.records.delete(id);

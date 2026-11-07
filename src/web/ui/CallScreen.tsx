@@ -41,6 +41,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const shares = sharesOf(view);
   const stage = shares.find((s) => s.id === stageId) ?? shares[0] ?? null;
   const seatsTaken = view.members.length + 1;
+  const seatsTotal = useRoomSeats(call.roomId);
 
   // Newest remote share takes the stage when it appears.
   const shareKey = shares.map((s) => s.id).join(",");
@@ -91,7 +92,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         <div class="rail-left">
           <span class="wordmark">Streamroom</span>
           <span class="rail-seats" data-testid="seat-count">
-            {seatsTaken} of 3 seats
+            {seatsTaken} of {seatsTotal} seats
           </span>
           {view.locked && (
             <span class="badge" data-testid="locked-badge">
@@ -388,4 +389,18 @@ function ShareAudio({ call, view, onError }: { call: Call; view: CallView; onErr
       </select>
     </label>
   </section>;
+}
+
+/** The room's seat count, chosen by the host at creation. */
+function useRoomSeats(roomId: string): number {
+  const [seats, setSeats] = useState(3);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/rooms/${roomId}`)
+      .then((r) => (r.ok ? (r.json() as Promise<{ max?: unknown }>) : null))
+      .then((p) => { if (alive && typeof p?.max === "number") setSeats(p.max); })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [roomId]);
+  return seats;
 }

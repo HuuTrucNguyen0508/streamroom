@@ -12,7 +12,9 @@ async function create(request: import("@playwright/test").APIRequestContext, bas
 }
 
 test("Worker routes and origin protection", async ({ request, baseURL }) => {
-  const response = await request.get("/?relay=1", { maxRedirects: 0 });
+  // "/" is the start screen (seat picker); "/?seats=N" from a host creates the room and redirects.
+  expect((await request.get("/", { maxRedirects: 0 })).status()).toBe(200);
+  const response = await request.get("/?seats=3&relay=1", { maxRedirects: 0 });
   expect(response.status()).toBe(302);
   expect(response.headers().location).toMatch(/^\/r\/[\w-]{22}\?relay=1$/);
   const room = await create(request, baseURL!);

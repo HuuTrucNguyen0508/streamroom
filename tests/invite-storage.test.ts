@@ -42,5 +42,14 @@ it("an early DO alarm retains an unexpired invite and reschedules", async () => 
   const f = fixture(), id = newRoomId(), room = new Room(f.ctx);
   await room.fetch(new Request(`http://localhost/create/${id}`, { method: "POST" }));
   vi.setSystemTime(2000); await room.alarm();
-  expect(f.records.size).toBe(1); expect(f.alarm()).toBe(1000 + ROOM_IDLE_MS);
+  expect([...f.records.keys()].sort()).toEqual(["expires", "seats"]); expect(f.alarm()).toBe(1000 + ROOM_IDLE_MS);
+});
+it("DO keeps the seat count chosen at creation across object restarts", async () => {
+  const f = fixture(), id = newRoomId();
+  await new Room(f.ctx).fetch(new Request(`http://localhost/create/${id}?seats=7`, { method: "POST" }));
+  const restarted = new Room(f.ctx);
+  expect(await (await restarted.fetch(new Request(`http://localhost/api/rooms/${id}`))).json()).toEqual({ members: 0, max: 7, locked: false });
+  const bad = newRoomId();
+  await new Room(f.ctx).fetch(new Request(`http://localhost/create/${bad}?seats=40`, { method: "POST" }));
+  expect(f.records.get("seats")).toBe(3);
 });

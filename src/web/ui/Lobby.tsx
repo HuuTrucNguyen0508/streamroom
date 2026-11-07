@@ -110,7 +110,7 @@ export function Lobby({ roomId, relayOnly, onJoin }: { roomId: RoomId; relayOnly
   const full = peek !== null && peek.members >= peek.max;
   if (full) {
     return (
-      <Notice title="This room is full." body="Streamroom keeps rooms to three people so everyone gets full quality. Ask someone inside to make space, or start a room of your own.">
+      <Notice title="This room is full." body="Every seat is taken. Ask someone inside to make space, or start a room of your own.">
         <button class="btn" onClick={() => location.reload()}>Try again</button>
         <a class="btn btn-primary" href="/">Start a new room</a>
       </Notice>
@@ -132,24 +132,24 @@ export function Lobby({ roomId, relayOnly, onJoin }: { roomId: RoomId; relayOnly
   };
 
   const inside = peek?.members ?? 0;
+  const max = peek?.max ?? 3;
+  const free = max - inside;
   const lede =
     peek === null
       ? "Checking who's here."
       : peek.locked
         ? "The host locked this room. You can join once they unlock it."
         : inside === 0
-          ? "Nobody's here yet. Join first, then send the link to one or two friends."
-          : inside === 1
-            ? "One person is inside, with room for two more."
-            : "Two people are inside. Yours is the last seat.";
+          ? "Nobody's here yet. Join first, then send the link to your friends."
+          : `${inside === 1 ? "One person is" : `${inside} people are`} inside. ${free === 1 ? "Yours is the last seat." : `There's room for ${free} more.`}`;
 
   return (
     <main class="lobby" data-screen="lobby">
       <section class="lobby-intro">
         <p class="wordmark">Streamroom</p>
         <h1 class="lobby-title">Pull up a seat.</h1>
-        <div class="seat-row" aria-label={`${inside} of 3 seats taken`}>
-          {[0, 1, 2].map((i) => (
+        <div class="seat-row" aria-label={`${inside} of ${max} seats taken`}>
+          {Array.from({ length: max }, (_, i) => (
             <span key={i} class={`seat-dot${i < inside ? " is-taken" : ""}`} />
           ))}
         </div>

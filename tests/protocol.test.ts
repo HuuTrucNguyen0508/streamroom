@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { MAX_MESSAGE_BYTES, cleanName, isRoomId, newRoomId, parseClientMessage } from "../src/shared/protocol.ts";
+import { MAX_MESSAGE_BYTES, cleanName, isRoomId, newRoomId, parseClientMessage, parseSeats } from "../src/shared/protocol.ts";
 
 const state = { muted: false, hasMic: true, share: null };
 const room = "AAAAAAAAAAAAAAAAAAAAAA";
+
+describe("seat counts", () => {
+  it("accepts whole numbers from 2 to 10, from JSON or a query string", () => {
+    expect([parseSeats(2), parseSeats(10), parseSeats("5")]).toEqual([2, 10, 5]);
+    for (const bad of [1, 11, 3.5, "", "abc", null, undefined, "3e0x"]) expect(parseSeats(bad)).toBeNull();
+  });
+});
 
 describe("room ids", () => {
   it("are 128-bit base64url strings", () => {
