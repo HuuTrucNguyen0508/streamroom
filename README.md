@@ -1,6 +1,6 @@
 # Streamroom
 
-A temporary room for screen sharing and voice. The host picks the number of seats, from 2 to 10 (3 by default), when starting a room; open the link, choose a name, and invite your friends. Calls are peer-to-peer, so whoever shares their screen uploads one copy per viewer: big rooms need fast upload. Multiple people can share at once. Invite links expire after 24 hours without a call. Cloudflare stores invites durably; Bun keeps them in memory until restart. There are no accounts or recordings.
+A temporary room for screen sharing and voice. The host picks the number of seats, from 2 to 10 (3 by default), when starting a room; open the link, choose a name, and invite your friends. Calls are peer-to-peer, so whoever shares their screen uploads one copy per viewer: big rooms need fast upload. Multiple people can share at once. Invite links expire after 1 hour without a call. Cloudflare stores invites durably; Bun keeps them in memory until restart. There are no accounts or recordings.
 
 ## Quick start
 
@@ -99,7 +99,7 @@ The [pnpm 12.17.0 release](https://github.com/pnpm/pnpm/releases/tag/v12.17.0) e
 
 Set `HOST_PASSPHRASE` as a Worker secret or a Bun environment variable. Docker Compose passes it from `.env`. Use a long, private passphrase. With no passphrase, the app logs a warning and allows open room creation and ICE access for development.
 
-The base link asks for the passphrase, then creates an invite on the server. Friends open that invite without a passphrase, even before its creator joins. The first person to join still controls the call, with the existing hand-off order. Each idle invite lasts 24 hours; an active call keeps it alive and departure refreshes the deadline. Unknown and expired invites cannot join or mint TURN credentials.
+The base link asks for the passphrase, then creates an invite on the server. Friends open that invite without a passphrase, even before its creator joins. The first person to join still controls the call, with the existing hand-off order. Each idle invite lasts 1 hour; an active call keeps it alive and departure refreshes the deadline. Unknown and expired invites cannot join or mint TURN credentials.
 
 The `sr_host` cookie lasts 90 days and uses an HMAC-SHA256 signature keyed by the passphrase, HttpOnly, Secure and SameSite=Lax. HTTP localhost omits Secure. Changing the passphrase invalidates existing host sessions. Host login and explicit room creation require a same-origin POST. Login allows eight attempts per IP per minute, best effort per Bun process or Worker isolate. An authenticated host can also start another room by opening `/`.
 

@@ -50,7 +50,7 @@ The browser tests are headless. The Cloudflare transport checks also verify HTTP
 
 ## Room lifetime and compatibility
 
-Invite existence and idle expiry live in each room's Durable Object storage, independently of membership. They survive object recreation and deployments. Creation writes a 24-hour expiry and sets an alarm. Active sockets keep the invite alive; the last departure refreshes the 24-hour deadline. The alarm deletes idle expired records, and HTTP/WS routes reject expired records even before alarm delivery. Bun uses the same lifetime with an in-memory invite registry, which resets on restart.
+Invite existence and idle expiry live in each room's Durable Object storage, independently of membership. They survive object recreation and deployments. Creation writes a 1-hour expiry and sets an alarm. Active sockets keep the invite alive; the last departure refreshes the 1-hour deadline. The alarm deletes idle expired records, and HTTP/WS routes reject expired records even before alarm delivery. Bun uses the same lifetime with an in-memory invite registry, which resets on restart.
 
 Sockets use `accept()`, without hibernation. Membership, locks, host order and resume tokens remain in memory as before, so deployments can interrupt active calls. An invite can be opened again afterward until it expires.
 

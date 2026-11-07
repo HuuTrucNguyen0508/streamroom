@@ -1,7 +1,7 @@
 import { DEFAULT_SEATS, type RoomId } from "./protocol.ts";
 const encoder = new TextEncoder();
 export const HOST_MAX_AGE = 90 * 24 * 3600;
-export const ROOM_IDLE_MS = 24 * 3600 * 1000;
+export const ROOM_IDLE_MS = 3600 * 1000;
 
 async function key(secret: string): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);

@@ -143,7 +143,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
             <p class="empty-title">{view.members.length === 0 ? "You're the first one here." : "Nobody is sharing."}</p>
             <p class="empty-body">
               {view.members.length === 0
-                ? "Copy the invite link and send it to up to two friends. The invite stays open for 24 hours after everyone leaves."
+                ? "Copy the invite link and send it to your friends. The invite stays open for 1 hour after everyone leaves."
                 : "Share a screen and it lands here for everyone."}
             </p>
           </div>
