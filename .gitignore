@@ -3,3 +3,7 @@ dist/
 .env
 *.log
 test-results/
+
+.wrangler/
+.dev.vars
+.dev.vars.*

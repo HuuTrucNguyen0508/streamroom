@@ -83,7 +83,7 @@ export class Call {
     private readonly options: CallOptions,
   ) {
     const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    this.sig = new Signaling(`${scheme}//${location.host}/ws`, {
+    this.sig = new Signaling(`${scheme}//${location.host}/ws?room=${roomId}`, {
       open: () => void this.onOpen(),
       message: (msg) => this.onMessage(msg),
       drop: () => {

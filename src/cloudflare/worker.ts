@@ -1,0 +1,100 @@
+import { isRoomId, newRoomId, randomId } from "../shared/protocol.ts";
+import { Rooms, type Effect } from "../server/rooms.ts";
+import { SignalingSession, closeCode } from "../server/signaling.ts";
+import { cloudflareIce, type TurnSecrets } from "./turn.ts";
+
+interface Env extends TurnSecrets {
+  ASSETS: Fetcher;
+  ROOMS: DurableObjectNamespace;
+}
+
+const SECURITY_HEADERS = {
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Permissions-Policy": "microphone=(self), display-capture=(self), fullscreen=(self)",
+  "Content-Security-Policy": "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
+};
+
+function json(value: unknown): Response {
+  return Response.json(value, { headers: { "Cache-Control": "no-store" } });
+}
+
+async function route(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
+  if (path === "/") return new Response(null, { status: 302, headers: { Location: `/r/${newRoomId()}${url.search}`, "Cache-Control": "no-store" } });
+  if (path === "/healthz") return json({ ok: true });
+  if (path === "/api/ice") return json(await cloudflareIce(env));
+  const peek = /^\/api\/rooms\/([^/]+)$/.exec(path);
+  if (peek || path === "/ws") {
+    const room = peek ? peek[1] : url.searchParams.get("room");
+    if (!isRoomId(room)) return new Response("Unknown room", { status: 404 });
+    if (path === "/ws") {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("WebSocket required", { status: 426 });
+      const origin = request.headers.get("Origin");
+      if (origin !== null) {
+        try { if (new URL(origin).host !== url.host) return new Response("Forbidden", { status: 403 }); }
+        catch { return new Response("Forbidden", { status: 403 }); }
+      }
+    }
+    return env.ROOMS.get(env.ROOMS.idFromName(room)).fetch(request);
+  }
+  if (path.startsWith("/api/")) return new Response("Not found", { status: 404 });
+  return env.ASSETS.fetch(request);
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const response = await route(request, env);
+    if (response.status === 101) return response;
+    const headers = new Headers(response.headers);
+    for (const [key, value] of Object.entries(SECURITY_HEADERS)) headers.set(key, value);
+    return new Response(request.method === "HEAD" ? null : response.body, { status: response.status, headers });
+  },
+};
+
+/** Ephemeral state, like Node: ordinary accepted sockets prevent hibernation. */
+export class Room {
+  private readonly rooms = new Rooms();
+  private readonly sockets = new Map<string, WebSocket>();
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const room = url.pathname === "/ws" ? url.searchParams.get("room") : url.pathname.split("/").at(-1);
+    if (!isRoomId(room)) return new Response("Unknown room", { status: 404 });
+    if (url.pathname !== "/ws") return json(this.rooms.peek(room));
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const socket = pair[1];
+    socket.accept();
+    const conn = randomId(12);
+    const session = new SignalingSession(this.rooms, conn, room);
+    this.sockets.set(conn, socket);
+    const cleanup = () => {
+      if (this.sockets.get(conn) !== socket) return;
+      this.sockets.delete(conn);
+      this.apply(this.rooms.leave(conn));
+    };
+    socket.addEventListener("message", (event) => this.apply(session.receive(event.data)));
+    socket.addEventListener("close", cleanup);
+    socket.addEventListener("error", () => { cleanup(); socket.close(1011, "socket error"); });
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private apply(effects: Effect[]): void {
+    for (const effect of effects) {
+      const socket = this.sockets.get(effect.to);
+      if (!socket) continue;
+      if (effect.kind === "close") {
+        this.sockets.delete(effect.to);
+        socket.close(closeCode(effect.reason), effect.reason);
+        // Replaced connections were already removed by Rooms.join().
+        this.apply(this.rooms.leave(effect.to));
+      } else if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(effect.msg));
+      }
+    }
+  }
+}
