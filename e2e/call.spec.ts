@@ -203,7 +203,9 @@ test("three friends: voice, simultaneous screen shares, presets, full room, lock
   for (const f of [ada, ben, cy, dee]) await f.context.close();
 });
 
-test("relay only (?relay=1): media flows through coturn", async ({ browser }) => {
+test("relay only (?relay=1): media flows through coturn", async ({ browser, request }) => {
+  const ice = await (await request.get("/api/ice")).json();
+  test.skip(!ice.iceServers.some((s: { urls: string[] }) => s.urls.some((url) => /^turns?:/.test(url))), "Relay test requires TURN credentials; STUN-only development cannot relay.");
   const ada = await open(browser, "Ada");
   const ben = await open(browser, "Ben");
   await ada.page.goto("/?relay=1");
@@ -232,7 +234,7 @@ test("relay only (?relay=1): media flows through coturn", async ({ browser }) =>
 /** Join over a raw WebSocket to prove the server (not just the UI) enforces the lock. */
 function rawJoin(baseURL: string, room: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${baseURL.replace(/^http/, "ws")}/ws`);
+    const ws = new WebSocket(`${baseURL.replace(/^http/, "ws")}/ws?room=${room}`);
     const timer = setTimeout(() => reject(new Error("no answer")), 5000);
     ws.on("open", () =>
       ws.send(JSON.stringify({ t: "join", room, name: "Intruder", resume: null, state: { muted: false, hasMic: false, music: false, share: null } })),

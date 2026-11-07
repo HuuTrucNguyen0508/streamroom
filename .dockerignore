@@ -8,3 +8,6 @@ docs
 e2e
 tests
 *.log
+.wrangler
+.dev.vars
+.dev.vars.*
