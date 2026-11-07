@@ -23,6 +23,7 @@ function savedName(): string {
 }
 
 export function Lobby({ roomId, relayOnly, onJoin }: { roomId: RoomId; relayOnly: boolean; onJoin: (c: JoinChoice) => void }) {
+  const [missing, setMissing] = useState(false);
   const [peek, setPeek] = useState<RoomPeek | null>(null);
   const [name, setName] = useState(savedName);
   const [mic, setMic] = useState<MicStatus>({ kind: "asking" });
@@ -35,7 +36,7 @@ export function Lobby({ roomId, relayOnly, onJoin }: { roomId: RoomId; relayOnly
     let alive = true;
     const load = () =>
       fetch(`/api/rooms/${roomId}`)
-        .then((r) => r.json() as Promise<RoomPeek>)
+        .then((r) => { if (r.status === 404) { if (alive) setMissing(true); throw new Error("Unknown room"); } return r.json() as Promise<RoomPeek>; })
         .then((p) => alive && setPeek(p))
         .catch(() => undefined);
     void load();
@@ -103,6 +104,8 @@ export function Lobby({ roomId, relayOnly, onJoin }: { roomId: RoomId; relayOnly
       void ctx.close();
     };
   }, [mic]);
+
+  if (missing) return <Notice title="This room doesn't exist or has expired." body="Ask your friend for a fresh invite, or start a room of your own."><a class="btn btn-primary" href="/">Start a new room</a></Notice>;
 
   const full = peek !== null && peek.members >= peek.max;
   if (full) {

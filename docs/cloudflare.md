@@ -16,14 +16,15 @@ Login opens your browser. For a noninteractive deployment, provide `CLOUDFLARE_A
 In the Cloudflare dashboard, open **Realtime > TURN**, create a TURN key, and save its key ID and API token. They are separate from the account deployment token. Configure both Worker secrets:
 
 ```sh
+pnpm exec wrangler secret put HOST_PASSPHRASE
 pnpm exec wrangler secret put TURN_KEY_ID
 pnpm exec wrangler secret put TURN_KEY_API_TOKEN
 pnpm cf:deploy
 ```
 
-Wrangler can prompt to create the `streamroom` Worker when uploading its first secret. The deployment bundles the web app and applies the `v1` migration that creates the SQLite-backed `Room` class. No manual database setup is needed. The URL is `https://streamroom.<account-subdomain>.workers.dev`. Opening it creates an invite link.
+Wrangler can prompt to create the `streamroom` Worker when uploading its first secret. The deployment bundles the web app and applies the `v1` migration that creates the SQLite-backed `Room` class. No manual database setup is needed. The URL is `https://streamroom.<account-subdomain>.workers.dev`. Opening it asks for the host passphrase, then creates an invite link. Friends join through the invite without entering a passphrase.
 
-`/api/ice` generates fresh credentials for each request using the [Cloudflare TURN API](https://developers.cloudflare.com/realtime/turn/generate-credentials/). Credentials last 43,200 seconds, and responses have `Cache-Control: no-store`. Missing secrets or a provider error produces a logged warning and STUN-only configuration. STUN-only calls may fail between restrictive networks. Do not publish an invite until TURN is configured and tested.
+`/api/ice?room=<id>` generates fresh credentials for an existing invite, or `/api/ice` with a valid host cookie using the [Cloudflare TURN API](https://developers.cloudflare.com/realtime/turn/generate-credentials/). Credentials last 43,200 seconds, and responses have `Cache-Control: no-store`. Missing secrets or a provider error produces a logged warning and STUN-only configuration. STUN-only calls may fail between restrictive networks. Do not publish an invite until TURN is configured and tested.
 
 ## Local verification
 
@@ -49,7 +50,11 @@ The browser tests are headless. The Cloudflare transport checks also verify HTTP
 
 ## Room lifetime and compatibility
 
-Sockets use `accept()`, without the Hibernation API. The existing room model keeps membership, host order, locks, and resume tokens in memory. Hibernation would discard these unless serialized and restored along with connection state. Ordinary sockets keep each active object resident and preserve the current ephemeral behavior. Deployments and runtime restarts reset rooms; empty rooms disappear immediately, with the existing 30-second departed-token grace kept only in memory. SQLite backing enables the Free plan but stores no room data.
+Invite existence and idle expiry live in each room's Durable Object storage, independently of membership. They survive object recreation and deployments. Creation writes a 24-hour expiry and sets an alarm. Active sockets keep the invite alive; the last departure refreshes the 24-hour deadline. The alarm deletes idle expired records, and HTTP/WS routes reject expired records even before alarm delivery. Node uses the same lifetime with an in-memory invite registry, which resets on restart.
+
+Sockets use `accept()`, without hibernation. Membership, locks, host order and resume tokens remain in memory as before, so deployments can interrupt active calls. An invite can be opened again afterward until it expires.
+
+Host sessions use a 90-day HMAC-signed HttpOnly, Secure, SameSite=Lax cookie keyed by `HOST_PASSPHRASE`. Login checks exact Origin and uses a best-effort per-isolate IP throttle. Rotating the secret invalidates host cookies. Without it, startup requests log an open-access warning and creation/ICE remain open for local development. Add `HOST_PASSPHRASE` to ignored `.dev.vars` for local auth tests, and delete that file when finished.
 
 HTTP routes remain `/`, `/r/<id>`, `/api/rooms/<id>`, `/api/ice`, and `/healthz`. `/healthz` reports readiness rather than global room counts, since room state is distributed. Signaling uses `/ws?room=<id>` with the same message protocol. The join room must match the routing ID. The Node server accepts that query too; older clients without it cannot connect to the Worker. Both transports share the pure room model, parser, and message dispatch. The Worker checks WebSocket origins against the request host.
 
@@ -60,7 +65,7 @@ The three-person mesh and media presets are unchanged. Every sharer uploads one 
 Checked November 7, 2026. Confirm current dashboard pricing before deployment:
 
 - [Workers Free](https://developers.cloudflare.com/workers/platform/pricing/) allows 100,000 requests/day and 10 ms CPU per invocation. Static Asset requests are free; this configuration runs the Worker first to handle the room-creation redirect and security headers.
-- [Durable Objects Free](https://developers.cloudflare.com/durable-objects/platform/pricing/) includes 100,000 requests/day and 13,000 GB-seconds/day. Accepted sockets keep objects active and consume duration even when nobody is sending signaling messages. Concurrent rooms share that daily allowance. Exceeding free limits causes requests to fail. SQLite has separate storage and row-operation limits; this app does not write room state.
+- [Durable Objects Free](https://developers.cloudflare.com/durable-objects/platform/pricing/) includes 100,000 requests/day and 13,000 GB-seconds/day. Accepted sockets keep objects active and consume duration even when nobody is sending signaling messages. Concurrent rooms share that daily allowance. Exceeding free limits causes requests to fail. SQLite has separate storage and row-operation limits; this app writes invite expiry and alarm state.
 - [Realtime TURN pricing](https://developers.cloudflare.com/realtime/sfu/platform/pricing/) includes 1,000 GB/month shared with SFU usage, then $0.05/GB of egress. Multiple simultaneous mesh shares multiply relay traffic. TURN billing is separate from Workers/DO usage.
 
-Room links are bearer access. The public ICE endpoint can mint relay credentials for anyone who can reach it. Monitor TURN usage and revoke a key if abused; add account-level rate limiting or access controls if exposing it broadly. The current implementation preserves the app's account-free access model.
+Room links are bearer access. ICE credentials require an existing invite or a valid host cookie when the passphrase is configured. Monitor TURN usage and revoke a key if abused; add account-level rate limiting or access controls if exposing it broadly. Keep invite links private. The passphrase protects creation and base-link TURN abuse without adding guest accounts.

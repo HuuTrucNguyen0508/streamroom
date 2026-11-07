@@ -3,7 +3,7 @@
 
 import type { MemberId, MemberInfo, MemberState, PresetId, RoomId, ServerMessage } from "../../shared/protocol.ts";
 import { AudioEngine, type Meter } from "./audio.ts";
-import { getMic, getScreen } from "./media.ts";
+import { getMic, getScreen, micConstraints } from "./media.ts";
 import { PeerLink } from "./peer.ts";
 import { AUDIO_MAX_BITRATE, PRESETS } from "./presets.ts";
 import { Signaling } from "./signaling.ts";
@@ -31,6 +31,8 @@ export interface CallView {
   self: MemberState;
   micDeviceId: string | null;
   localScreen: MediaStream | null;
+  audioSource: string;
+  noDisplayAudio: boolean;
   members: RemoteView[];
   relayOnly: boolean;
   notice: string | null;
@@ -47,6 +49,7 @@ interface Remote {
 interface LinkSenders {
   mic: RTCRtpTransceiver | null;
   screen: RTCRtpTransceiver[];
+  screenAudio: RTCRtpTransceiver | null;
 }
 
 /** How long the polite side waits for the other side's first offer before offering itself. */
@@ -68,6 +71,10 @@ export class Call {
   private mic: MediaStream | null = null;
   private micMeter: Meter | null = null;
   private screen: MediaStream | null = null;
+  private browserAudio: MediaStreamTrack | null = null;
+  private audioSource = savedAudioSource();
+  private noDisplayAudio = false;
+  private audioRevision = 0;
   private state: MemberState = { muted: false, hasMic: false, music: false, share: null };
   private micDeviceId: string | null = null;
   private phase: Phase = "idle";
@@ -124,6 +131,8 @@ export class Call {
       self: this.state,
       micDeviceId: this.micDeviceId,
       localScreen: this.screen,
+      audioSource: this.audioSource,
+      noDisplayAudio: this.noDisplayAudio,
       relayOnly: this.options.relayOnly,
       notice: this.notice,
       members: [...this.remotes.values()].map((r) => ({
@@ -154,8 +163,7 @@ export class Call {
   leave(): void {
     this.sig.close();
     for (const id of [...this.remotes.keys()]) this.dropRemote(id);
-    this.stopTracks(this.screen);
-    this.screen = null;
+    this.stopShare();
     this.setMic(null);
     this.audio.close();
     this.setPhase("left");
@@ -163,7 +171,7 @@ export class Call {
 
   private async onOpen(): Promise<void> {
     try {
-      const res = await fetch("/api/ice", { cache: "no-store" });
+      const res = await fetch(`/api/ice?room=${this.roomId}`, { cache: "no-store" });
       const body = (await res.json()) as { iceServers: RTCIceServer[] };
       this.iceServers = body.iceServers;
     } catch (err) {
@@ -241,12 +249,15 @@ export class Call {
       },
     );
     remote.link = link;
-    const senders: LinkSenders = { mic: null, screen: [] };
+    const senders: LinkSenders = { mic: null, screen: [], screenAudio: null };
     this.senders.set(link, senders);
     const attach = () => {
       if (this.senders.get(link) !== senders) return; // dropped meanwhile
       if (this.mic && !senders.mic) senders.mic = this.sendMic(link, this.mic);
-      if (this.screen && this.state.share && senders.screen.length === 0) senders.screen = this.sendScreen(link, this.screen, this.state.share.preset);
+      if (this.screen && this.state.share && senders.screen.length === 0) {
+        senders.screen = this.sendScreen(link, this.screen, this.state.share.preset);
+        senders.screenAudio = senders.screen.find((t) => t.sender.track?.kind === "audio") ?? null;
+      }
     };
     // Only the impolite side offers first; see PeerLink.firstRemoteDescription.
     if (link.polite) void link.firstRemoteDescription(FIRST_OFFER_WAIT_MS).then(attach);
@@ -353,6 +364,8 @@ export class Call {
     return this.replaceMic(this.micDeviceId, music);
   }
 
+  clearNotice(): void { this.notice = null; this.emit(); }
+
   async startShare(presetId: PresetId): Promise<void> {
     const stream = await getScreen(PRESETS[presetId]);
     if (this.screen) this.stopShare();
@@ -361,15 +374,60 @@ export class Call {
       // The browser's own "Stop sharing" button.
       if (this.screen === stream) this.stopShare();
     });
-    for (const [link, s] of this.senders) s.screen = this.sendScreen(link, stream, presetId);
+    this.browserAudio = stream.getAudioTracks()[0] ?? null;
+    this.noDisplayAudio = !this.browserAudio;
+    try { await this.switchShareAudio(this.audioSource); }
+    catch { this.audioSource = "browser"; this.notice = "Couldn't open the saved audio source. Choose another source."; }
+    if (this.screen !== stream) return;
+    for (const [link, s] of this.senders) {
+      s.screen = this.sendScreen(link, stream, presetId);
+      s.screenAudio = s.screen.find((t) => t.sender.track?.kind === "audio") ?? null;
+    }
     this.state = { ...this.state, share: { streamId: stream.id, preset: presetId, hasAudio: stream.getAudioTracks().length > 0 } };
     this.broadcastState();
   }
 
+  async switchShareAudio(source: string): Promise<void> {
+    const stream = this.screen;
+    if (!stream) return;
+    const revision = ++this.audioRevision;
+    let track: MediaStreamTrack | null = null;
+    if (source === "browser") track = this.browserAudio;
+    else if (source !== "none") {
+      const capture = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(source, true), video: false });
+      track = capture.getAudioTracks()[0] ?? null;
+      if (track) track.contentHint = "music";
+    }
+    if (this.screen !== stream || revision !== this.audioRevision) { if (track !== this.browserAudio) track?.stop(); return; }
+    const before = stream.getAudioTracks();
+    try {
+      for (const [link, s] of this.senders) {
+        if (s.screenAudio) await s.screenAudio.sender.replaceTrack(track);
+        else if (track && this.state.share) {
+          s.screenAudio = link.addTrack(track, stream, { maxBitrate: AUDIO_MAX_BITRATE });
+          s.screen.push(s.screenAudio);
+        }
+      }
+    } catch (error) { if (track !== this.browserAudio) track?.stop(); throw error; }
+    if (this.screen !== stream || revision !== this.audioRevision) { if (track !== this.browserAudio) track?.stop(); return; }
+    for (const old of before) { stream.removeTrack(old); if (old !== this.browserAudio && old !== track) old.stop(); }
+    if (track) stream.addTrack(track);
+    this.audioSource = source;
+    this.notice = null;
+    try { localStorage.setItem("streamroom:share-audio", source); } catch { /* Storage is optional. */ }
+    if (this.state.share) this.state = { ...this.state, share: { ...this.state.share, hasAudio: track !== null } };
+    this.broadcastState();
+  }
+
   stopShare(): void {
+    this.audioRevision++;
+    this.browserAudio?.stop();
+    this.browserAudio = null;
+    this.noDisplayAudio = false;
     for (const [link, s] of this.senders) {
       for (const t of s.screen) link.removeTrack(t);
       s.screen = [];
+      s.screenAudio = null;
     }
     this.stopTracks(this.screen);
     this.screen = null;
@@ -446,4 +504,8 @@ function writeResume(roomId: RoomId, token: string): void {
   } catch {
     // Private mode: reconnects still work within this page.
   }
+}
+
+function savedAudioSource(): string {
+  try { return localStorage.getItem("streamroom:share-audio") || "browser"; } catch { return "browser"; }
 }

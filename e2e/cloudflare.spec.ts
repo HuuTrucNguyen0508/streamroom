@@ -4,11 +4,18 @@ import { newRoomId } from "../src/shared/protocol.ts";
 
 test.skip(process.env.E2E_CLOUDFLARE !== "1", "Cloudflare-specific transport checks; set E2E_CLOUDFLARE=1.");
 
+test.beforeEach(async ({ request, baseURL }) => {
+  if (process.env.E2E_HOST_PASSPHRASE) expect((await request.post("/api/host-session", { headers: { Origin: baseURL! }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } })).ok()).toBe(true);
+});
+async function create(request: import("@playwright/test").APIRequestContext, baseURL: string): Promise<string> {
+  return (await (await request.post("/api/rooms", { headers: { Origin: baseURL } })).json()).id;
+}
+
 test("Worker routes and origin protection", async ({ request, baseURL }) => {
   const response = await request.get("/?relay=1", { maxRedirects: 0 });
   expect(response.status()).toBe(302);
   expect(response.headers().location).toMatch(/^\/r\/[\w-]{22}\?relay=1$/);
-  const room = newRoomId();
+  const room = await create(request, baseURL!);
   expect(await (await request.get(`/api/rooms/${room}`)).json()).toEqual({ members: 0, max: 3, locked: false });
   expect((await request.get("/api/rooms/invalid")).status()).toBe(404);
   expect((await request.post("/api/ice")).status()).toBe(405);
@@ -24,7 +31,7 @@ test("Worker routes and origin protection", async ({ request, baseURL }) => {
 });
 
 test("Durable Object rejects wrong-room joins and oversized messages, then cleans up", async ({ baseURL, request }) => {
-  const room = newRoomId();
+  const room = await create(request, baseURL!);
   const socket = new WebSocket(`${baseURL!.replace(/^http/, "ws")}/ws?room=${room}`);
   await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
   const receive = () => new Promise<unknown>((resolve, reject) => {

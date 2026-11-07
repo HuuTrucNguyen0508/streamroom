@@ -7,12 +7,17 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { MAX_MESSAGE_BYTES, isRoomId, newRoomId, randomId } from "../shared/protocol.ts";
+import { type RoomId, MAX_MESSAGE_BYTES, isRoomId, newRoomId, randomId } from "../shared/protocol.ts";
 import { Rooms, type ConnId, type Effect } from "./rooms.ts";
 import { SignalingSession, closeCode } from "./signaling.ts";
 import { iceServers } from "./turn.ts";
 
+import { HostAttempts, RoomInvites, hostCookie, hostToken, isHost, passphraseMatches, sameOrigin } from "../shared/host.ts";
 const env = process.env;
+const hostSecret = env.HOST_PASSPHRASE ?? "";
+if (!hostSecret) console.warn("HOST_PASSPHRASE is unset: room creation and ICE access are open.");
+const attempts = new HostAttempts();
+const invites = new RoomInvites();
 const PORT = Number(env.PORT ?? 8080);
 const HOST = env.HOST ?? "0.0.0.0";
 const TURN_SECRET = env.TURN_SECRET ?? "";
@@ -24,6 +29,7 @@ const PUBLIC_DIR = resolve(env.PUBLIC_DIR ?? fileURLToPath(new URL("../../web", 
 
 const rooms = new Rooms();
 const sockets = new Map<ConnId, WebSocket>();
+setInterval(() => invites.prune((id) => rooms.peek(id).members > 0), 60_000).unref();
 
 const SECURITY_HEADERS: Record<string, string> = {
   // Room IDs are secrets in the URL: never leak them through Referer.
@@ -95,23 +101,46 @@ async function handleIce(req: IncomingMessage, res: ServerResponse): Promise<voi
 }
 
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url ?? "/", "http://localhost");
+  const url = new URL(req.url ?? "/", `${(("encrypted" in req.socket && req.socket.encrypted) || req.headers["x-forwarded-proto"] === "https") ? "https" : "http"}://${req.headers.host ?? "localhost"}`);
   const path = url.pathname;
+  const host = await isHost(req.headers.cookie ?? null, hostSecret);
+  const existing = (id: string) => isRoomId(id) && invites.exists(id, rooms.peek(id).members > 0);
+  if (req.method === "POST" && ["/api/host-session", "/api/rooms"].includes(path)) {
+    if (!sameOrigin(req.headers.origin ?? null, url)) return send(res, 403, "Forbidden origin");
+    if (path === "/api/rooms") {
+      if (!host) return send(res, 403, "Host session required");
+      const id = newRoomId(); invites.create(id); return sendJson(res, { id });
+    }
+    if (!attempts.allow(req.socket.remoteAddress ?? "unknown")) return send(res, 429, "Too many attempts. Try again in a minute.");
+    req.setEncoding("utf8");
+    let body = "";
+    for await (const chunk of req) { body += String(chunk); if (body.length > 4096) return send(res, 413, "Too large"); }
+    let candidate: unknown;
+    try { candidate = JSON.parse(body); } catch { return send(res, 400, "Invalid JSON"); }
+    if (typeof candidate !== "object" || candidate === null || !("passphrase" in candidate) || typeof candidate.passphrase !== "string") return send(res, 400, "Passphrase required");
+    if (hostSecret && !await passphraseMatches(candidate.passphrase, hostSecret)) return send(res, 403, "That passphrase isn't right.");
+    return send(res, 204, "", { "Set-Cookie": hostCookie(await hostToken(hostSecret || "open", Date.now()), url) });
+  }
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "Method not allowed");
 
   if (path === "/healthz") return sendJson(res, { ok: true, rooms: rooms.roomCount, sockets: sockets.size });
-  if (path === "/api/ice") return handleIce(req, res);
+  if (path === "/api/ice") {
+    if (!host && !existing(url.searchParams.get("room") ?? "")) return send(res, 403, "Invite or host session required");
+    return handleIce(req, res);
+  }
 
   const peek = /^\/api\/rooms\/([^/]+)$/.exec(path);
   if (peek) {
     const id = peek[1];
-    return isRoomId(id) ? sendJson(res, rooms.peek(id)) : send(res, 404, "Unknown room");
+    return isRoomId(id) && existing(id) ? sendJson(res, rooms.peek(id)) : send(res, 404, "Unknown room");
   }
 
   if (path === "/") {
+    if (!host) { await serveFile(res, "index.html", "no-cache"); return; }
+    const id = newRoomId(); invites.create(id);
     // Opening the app makes a fresh room. The 128-bit ID in the link is the invite.
     const query = url.search; // keep debug flags such as ?relay=1
-    return send(res, 302, "", { Location: `/r/${newRoomId()}${query}` });
+    return send(res, 302, "", { Location: `/r/${id}${query}` });
   }
 
   if (path.startsWith("/r/")) {
@@ -160,19 +189,23 @@ server.on("upgrade", (req, socket, head) => {
   } catch {
     sameOrigin = false;
   }
+  const room = url.searchParams.get("room");
+  if (!isRoomId(room) || !invites.exists(room, rooms.peek(room).members > 0)) {
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n"); socket.destroy(); return;
+  }
   if (url.pathname !== "/ws" || !sameOrigin) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;
   }
-  wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws));
+  wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, room));
 });
 
-function onConnection(ws: WebSocket): void {
+function onConnection(ws: WebSocket, room: RoomId): void {
   const conn: ConnId = randomId(12);
   sockets.set(conn, ws);
   let alive = true;
-  const session = new SignalingSession(rooms, conn);
+  const session = new SignalingSession(rooms, conn, room);
 
   ws.on("pong", () => {
     alive = true;
@@ -184,11 +217,13 @@ function onConnection(ws: WebSocket): void {
   }, 15_000);
 
   ws.on("message", (raw, isBinary) => {
+    invites.touch(room);
     apply(session.receive(isBinary ? new ArrayBuffer(0) : raw.toString()));
   });
 
   ws.on("close", () => {
     clearInterval(heartbeat);
+    invites.touch(room);
     // A replaced socket was already removed from `sockets` and from its room.
     if (sockets.get(conn) === ws) {
       sockets.delete(conn);
