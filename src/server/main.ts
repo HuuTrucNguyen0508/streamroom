@@ -7,8 +7,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { MAX_MESSAGE_BYTES, isRoomId, newRoomId, parseClientMessage, randomId, type ServerMessage } from "../shared/protocol.ts";
+import { MAX_MESSAGE_BYTES, isRoomId, newRoomId, randomId } from "../shared/protocol.ts";
 import { Rooms, type ConnId, type Effect } from "./rooms.ts";
+import { SignalingSession, closeCode } from "./signaling.ts";
 import { iceServers } from "./turn.ts";
 
 const env = process.env;
@@ -20,7 +21,6 @@ const TURN_PORT = Number(env.TURN_PORT ?? 3478);
 const TURN_TTL = Number(env.TURN_TTL_SECONDS ?? 12 * 3600);
 const STUN_URLS = (env.STUN_URLS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 const PUBLIC_DIR = resolve(env.PUBLIC_DIR ?? fileURLToPath(new URL("../../web", import.meta.url)));
-const MAX_MSGS_PER_SECOND = 200;
 
 const rooms = new Rooms();
 const sockets = new Map<ConnId, WebSocket>();
@@ -143,15 +143,12 @@ function apply(effects: Effect[]): void {
     if (!socket) continue;
     if (effect.kind === "close") {
       sockets.delete(effect.to);
-      socket.close(4000, effect.reason);
+      socket.close(closeCode(effect.reason), effect.reason);
+      apply(rooms.leave(effect.to));
     } else if (socket.readyState === socket.OPEN) {
       socket.send(JSON.stringify(effect.msg));
     }
   }
-}
-
-function reply(socket: WebSocket, msg: ServerMessage): void {
-  if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
 }
 
 server.on("upgrade", (req, socket, head) => {
@@ -175,8 +172,7 @@ function onConnection(ws: WebSocket): void {
   const conn: ConnId = randomId(12);
   sockets.set(conn, ws);
   let alive = true;
-  let windowStart = Date.now();
-  let count = 0;
+  const session = new SignalingSession(rooms, conn);
 
   ws.on("pong", () => {
     alive = true;
@@ -188,33 +184,7 @@ function onConnection(ws: WebSocket): void {
   }, 15_000);
 
   ws.on("message", (raw, isBinary) => {
-    const now = Date.now();
-    if (now - windowStart > 1000) {
-      windowStart = now;
-      count = 0;
-    }
-    if (++count > MAX_MSGS_PER_SECOND) return ws.close(1008, "rate limit");
-    const msg = isBinary ? null : parseClientMessage(raw.toString());
-    if (!msg) return reply(ws, { t: "error", code: "bad_request", message: "Malformed message." });
-    switch (msg.t) {
-      case "join": {
-        const outcome = rooms.join(conn, msg.room, msg.name, msg.state, msg.resume);
-        apply(outcome.effects);
-        if (!outcome.ok) {
-          const message = outcome.error === "full" ? "This room already has 3 people." : "The host locked this room.";
-          reply(ws, { t: "error", code: outcome.error, message });
-        }
-        return;
-      }
-      case "signal":
-        return apply(rooms.signal(conn, msg.to, msg.data));
-      case "state":
-        return apply(rooms.updateState(conn, msg.state));
-      case "lock":
-        return apply(rooms.setLocked(conn, msg.locked));
-      case "ping":
-        return reply(ws, { t: "pong" });
-    }
+    apply(session.receive(isBinary ? new ArrayBuffer(0) : raw.toString()));
   });
 
   ws.on("close", () => {
