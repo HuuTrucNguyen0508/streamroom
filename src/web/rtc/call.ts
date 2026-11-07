@@ -30,6 +30,8 @@ export interface CallView {
   locked: boolean;
   self: MemberState;
   micDeviceId: string | null;
+  /** Where the call plays; "" is the system default. */
+  speakerId: string;
   localScreen: MediaStream | null;
   audioSource: string;
   noDisplayAudio: boolean;
@@ -73,6 +75,7 @@ export class Call {
   private screen: MediaStream | null = null;
   private browserAudio: MediaStreamTrack | null = null;
   private audioSource = savedAudioSource();
+  private speakerId = "";
   private noDisplayAudio = false;
   private audioRevision = 0;
   private state: MemberState = { muted: false, hasMic: false, share: null };
@@ -98,6 +101,9 @@ export class Call {
       },
     });
     this.resume = readResume(roomId);
+    const speaker = savedSpeaker();
+    // A saved device that's gone (unplugged headset) leaves the call on the system default.
+    if (speaker) void this.audio.setSink(speaker).then(() => { this.speakerId = speaker; this.emit(); }, () => undefined);
     this.view = this.buildView();
   }
 
@@ -130,6 +136,7 @@ export class Call {
       locked: this.locked,
       self: this.state,
       micDeviceId: this.micDeviceId,
+      speakerId: this.speakerId,
       localScreen: this.screen,
       audioSource: this.audioSource,
       noDisplayAudio: this.noDisplayAudio,
@@ -360,6 +367,13 @@ export class Call {
     return this.replaceMic(this.micDeviceId);
   }
 
+  async setSpeaker(deviceId: string): Promise<void> {
+    await this.audio.setSink(deviceId);
+    this.speakerId = deviceId;
+    try { localStorage.setItem("streamroom:speaker", deviceId); } catch { /* Storage is optional. */ }
+    this.emit();
+  }
+
   clearNotice(): void { this.notice = null; this.emit(); }
 
   async startShare(presetId: PresetId): Promise<void> {
@@ -500,6 +514,10 @@ function writeResume(roomId: RoomId, token: string): void {
   } catch {
     // Private mode: reconnects still work within this page.
   }
+}
+
+function savedSpeaker(): string {
+  try { return localStorage.getItem("streamroom:speaker") ?? ""; } catch { return ""; }
 }
 
 function savedAudioSource(): string {
