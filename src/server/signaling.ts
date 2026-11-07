@@ -1,7 +1,7 @@
 import { MAX_MESSAGE_BYTES, parseClientMessage, type RoomId } from "../shared/protocol.ts";
 import { Rooms, type ConnId, type Effect } from "./rooms.ts";
 
-/** Shared per-connection validation and dispatch for Node and Durable Objects. */
+/** Shared per-connection validation and dispatch for Bun and Durable Objects. */
 export class SignalingSession {
   private windowStart = 0;
   private count = 0;

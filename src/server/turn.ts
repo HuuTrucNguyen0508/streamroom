@@ -1,6 +1,6 @@
 // TURN REST API credentials (draft-uberti-behave-turn-rest), as coturn's `use-auth-secret` expects:
 //   username = "<unix expiry>:<label>", credential = base64(HMAC-SHA1(secret, username)).
-// Web Crypto only, so it runs on Node and on Cloudflare Workers.
+// Web Crypto only, so it runs on Bun and on Cloudflare Workers.
 
 export interface IceServer {
   urls: string[];

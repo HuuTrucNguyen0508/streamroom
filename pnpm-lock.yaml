@@ -169,9 +169,6 @@ importers:
       preact:
         specifier: ^11.1.1
         version: 11.1.1
-      ws:
-        specifier: ^8.22.1
-        version: 8.22.1
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261106.1
@@ -188,6 +185,9 @@ importers:
       '@preact/preset-vite':
         specifier: ^2.10.6
         version: 2.10.6(@babel/core@7.29.13(supports-color@10.2.2))(preact@11.1.1)(supports-color@10.2.2)(vite@8.3.6(@types/node@26.6.6)(esbuild@0.28.2))
+      '@types/bun':
+        specifier: 1.4.4
+        version: 1.4.4
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -206,6 +206,9 @@ importers:
       wrangler:
         specifier: ^4.158.0
         version: 4.158.0(@cloudflare/workers-types@5.20261106.1)(@types/node@26.6.6)
+      ws:
+        specifier: ^8.22.1
+        version: 8.22.1
 
 packages:
 
@@ -859,6 +862,9 @@ packages:
   '@speed-highlight/core@1.2.24':
     resolution: {integrity: sha512-qeW2e1l78afw8VhRPfPQ1Gjj+KU5XFQ/OFV5ti6eTa9bruO7mJyZtA4vw0ofqmA3tKCkROE9xLk3VZoeRc98nw==}
 
+  '@types/bun@1.4.4':
+    resolution: {integrity: sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ==}
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -1032,6 +1038,9 @@ packages:
     resolution: {integrity: sha512-khTmKu5NGYTotqcYo8Bew2k4RAE9PuXRSFRXG2lQBrCEQHyeQ/vX6gKMxfokwywBsLiXZMnHsmWMG1pnO8J7uQ==}
     engines: {node: ^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7}
     hasBin: true
+
+  bun-types@1.4.4:
+    resolution: {integrity: sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ==}
 
   caniuse-lite@1.0.30001822:
     resolution: {integrity: sha512-Y3fvWQWzc69dlCyr07tuNrEhotv+db5FpMSPD3slZnkPKwRNOKwFBz2dP966XUmWMXLTOt+YShkFoQoom3U7hg==}
@@ -2026,6 +2035,10 @@ snapshots:
 
   '@speed-highlight/core@1.2.24': {}
 
+  '@types/bun@1.4.4':
+    dependencies:
+      bun-types: 1.4.4
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -2133,6 +2146,11 @@ snapshots:
       electron-to-chromium: 1.5.477
       node-releases: 2.0.63
       update-browserslist-db: 1.3.4(browserslist@4.29.5)
+
+  bun-types@1.4.4:
+    dependencies:
+      '@types/node': 26.6.6
+      undici-types: 8.9.0
 
   caniuse-lite@1.0.30001822: {}
 

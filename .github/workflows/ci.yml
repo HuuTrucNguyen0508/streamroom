@@ -17,10 +17,24 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm cf:typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Bun server smoke test
+        run: |
+          HOST_PASSPHRASE=ci-smoke PORT=18080 bun src/server/main.ts &
+          server_pid=$!
+          trap 'kill "$server_pid"; wait "$server_pid" || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail http://127.0.0.1:18080/healthz; then break; fi
+            sleep 1
+          done
+          curl --fail http://127.0.0.1:18080/healthz
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/ice)" = 403
       - run: pnpm cf:check
       - run: docker build .
