@@ -39,11 +39,11 @@ describe("host sessions", () => {
   });
 });
 describe("invite lifetime", () => {
-  it("requires creation and survives an hour without members", () => {
+  it("requires creation and survives until its idle deadline without members", () => {
     const invites = new RoomInvites(), id = newRoomId();
     expect(invites.exists(id, false, 0)).toBe(false);
     invites.create(id, 3, 0);
-    expect(invites.exists(id, false, 3600000)).toBe(true);
+    expect(invites.exists(id, false, ROOM_IDLE_MS - 1)).toBe(true);
     expect(invites.exists(id, false, ROOM_IDLE_MS)).toBe(false);
   });
   it("keeps active rooms and refreshes the idle deadline on departure", () => {

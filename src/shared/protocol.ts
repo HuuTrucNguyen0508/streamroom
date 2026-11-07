@@ -12,6 +12,13 @@ export function parseSeats(v: unknown): number | null {
   return typeof n === "number" && Number.isInteger(n) && n >= MIN_SEATS && n <= MAX_SEATS ? n : null;
 }
 export const MAX_MESSAGE_BYTES = 64 * 1024;
+/** Clients ping this often. */
+export const PING_INTERVAL_MS = 20_000;
+/**
+ * A connection silent this long is dead (two missed pings): a VPN or network switch can drop it
+ * without a close reaching either side. The server frees its seat; the client reconnects and resumes.
+ */
+export const SILENT_DROP_MS = 50_000;
 export const MAX_NAME_LENGTH = 32;
 
 /** Room IDs are 16 random bytes (128 bits) encoded as unpadded base64url: 22 chars. */

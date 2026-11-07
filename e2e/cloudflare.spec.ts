@@ -55,3 +55,36 @@ test("Durable Object rejects wrong-room joins and oversized messages, then clean
     socket.close();
   }
 });
+
+test("a connection that stops pinging loses its seat, so a VPN switch leaves no ghost", async ({ baseURL, request }) => {
+  test.setTimeout(120_000);
+  const room = await create(request, baseURL!);
+  // The ghost: joins, then goes silent like a socket whose network vanished. It never pings.
+  const ghost = new WebSocket(`${baseURL!.replace(/^http/, "ws")}/ws?room=${room}`);
+  await new Promise<void>((resolve, reject) => { ghost.once("open", resolve); ghost.once("error", reject); });
+  const joined = new Promise<unknown>((resolve) => ghost.once("message", (data) => resolve(JSON.parse(String(data)))));
+  ghost.send(JSON.stringify({ t: "join", room, name: "Ghost", resume: null, state: { muted: false, hasMic: true, share: null } }));
+  expect(await joined).toMatchObject({ t: "joined" });
+  // A live friend keeps pinging and must keep their seat.
+  const friend = new WebSocket(`${baseURL!.replace(/^http/, "ws")}/ws?room=${room}`);
+  await new Promise<void>((resolve, reject) => { friend.once("open", resolve); friend.once("error", reject); });
+  friend.send(JSON.stringify({ t: "join", room, name: "Friend", resume: null, state: { muted: false, hasMic: true, share: null } }));
+  const pings = setInterval(() => friend.send(JSON.stringify({ t: "ping" })), 20_000);
+  const left = new Promise<unknown>((resolve) => friend.on("message", (data) => {
+    const msg = JSON.parse(String(data)) as { t: string };
+    if (msg.t === "member-left") resolve(msg);
+  }));
+  try {
+    await expect.poll(async () => (await (await request.get(`/api/rooms/${room}`)).json()).members).toBe(2);
+    const started = Date.now();
+    await left;
+    const waited = Date.now() - started;
+    console.log(`Silent connection evicted after ${Math.round(waited / 1000)} s`);
+    expect(waited).toBeGreaterThan(40_000);
+    expect(waited).toBeLessThan(75_000);
+    expect((await (await request.get(`/api/rooms/${room}`)).json()).members).toBe(1);
+  } finally {
+    clearInterval(pings);
+    ghost.close(); friend.close();
+  }
+});

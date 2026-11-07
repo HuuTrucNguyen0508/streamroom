@@ -57,7 +57,7 @@ function InCall({ call }: { call: Call }) {
   }
   if (view.phase === "left") {
     return (
-      <Notice title="You left the room." body="Your invite stays valid for 24 hours after everyone leaves.">
+      <Notice title="You left the room." body="Your invite stays valid for 1 hour after everyone leaves.">
         <button class="btn btn-primary" onClick={() => location.reload()}>Rejoin</button>
         <a class="btn" href="/">Start a new room</a>
       </Notice>

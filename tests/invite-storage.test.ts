@@ -16,14 +16,14 @@ function fixture() {
   return { ctx, records, alarm: () => alarm };
 }
 afterEach(() => vi.useRealTimers());
-it("DO invite exists before any host joins and survives a new object instance after an hour", async () => {
+it("DO invite exists before any host joins and survives a new object instance halfway to expiry", async () => {
   vi.useFakeTimers(); vi.setSystemTime(1000);
   const f = fixture(), id = newRoomId();
   const room = new Room(f.ctx);
   expect((await room.fetch(new Request(`http://localhost/api/rooms/${id}`))).status).toBe(404);
   expect((await room.fetch(new Request(`http://localhost/create/${id}`, { method: "POST" }))).ok).toBe(true);
   expect(f.alarm()).toBe(1000 + ROOM_IDLE_MS);
-  vi.setSystemTime(3601000);
+  vi.setSystemTime(1000 + ROOM_IDLE_MS / 2);
   const restarted = new Room(f.ctx);
   expect(await (await restarted.fetch(new Request(`http://localhost/api/rooms/${id}`))).json()).toEqual({ members: 0, max: 3, locked: false });
 });
