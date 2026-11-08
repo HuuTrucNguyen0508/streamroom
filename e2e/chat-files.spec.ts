@@ -2,7 +2,8 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { expect, test, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import { existsSync } from "node:fs";
+import { expect, firefox, test, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import WebSocket from "ws";
 
 interface Friend {
@@ -246,6 +247,39 @@ test("files: cancel stops a download, and a sender leaving fails one in progress
   await expect(card(ben, "archive.bin").getByRole("button")).toHaveCount(0);
 
   for (const f of [ada, ben]) await f.context.close();
+});
+
+test("files: Chromium and Firefox send each other a file", async ({ browser, baseURL }, testInfo) => {
+  test.skip(!existsSync(firefox.executablePath()), "Playwright Firefox isn't installed: pnpm exec playwright install firefox");
+  const fox = await firefox.launch({
+    headless: true,
+    firefoxUserPrefs: {
+      "media.navigator.streams.fake": true,
+      "media.navigator.permission.disabled": true,
+      "media.peerconnection.ice.obfuscate_host_addresses": false,
+    },
+  });
+  try {
+    const ada = await open(browser, "Ada");
+    const ben = await open(fox, "Ben");
+    const room = await createRoom(ada, baseURL!);
+    await join(ada, room);
+    await join(ben, room);
+    const toFox = testInfo.outputPath("to-firefox.bin");
+    const toChromium = testInfo.outputPath("to-chromium.bin");
+    const [toFoxDigest, toChromiumDigest] = await Promise.all([randomFile(toFox, 3 * 1024 * 1024 + 7), randomFile(toChromium, 2 * 1024 * 1024 + 11)]);
+    await share(ada, toFox);
+    await share(ben, toChromium);
+    await card(ben, "to-firefox.bin").getByRole("button", { name: "Download" }).click();
+    await card(ada, "to-chromium.bin").getByRole("button", { name: "Download" }).click();
+    await expect(card(ben, "to-firefox.bin")).toHaveAttribute("data-state", "done", { timeout: 60_000 });
+    await expect(card(ada, "to-chromium.bin")).toHaveAttribute("data-state", "done", { timeout: 60_000 });
+    expect(await saveAndHash(ben, "to-firefox.bin")).toBe(toFoxDigest);
+    expect(await saveAndHash(ada, "to-chromium.bin")).toBe(toChromiumDigest);
+    await ada.context.close();
+  } finally {
+    await fox.close();
+  }
 });
 
 test("screenshots of the chat panel", async ({ browser, baseURL }, testInfo) => {

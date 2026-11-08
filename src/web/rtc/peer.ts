@@ -88,8 +88,8 @@ export class PeerLink {
       this.events.change();
     };
     pc.ondatachannel = ({ channel }) => this.events.channel(channel);
-    // Only the impolite side creates the control channel, so it makes the first offer even when
-    // neither side has media, and the polite side keeps waiting for that offer.
+    // Only the impolite side creates the control channel, so it offers first even when neither
+    // side has media, and the polite side's bounded wait for that first offer is normally met.
     if (!polite) this.events.channel(pc.createDataChannel("ctl", { ordered: true }));
   }
 

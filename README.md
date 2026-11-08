@@ -1,6 +1,6 @@
 # Streamroom
 
-A temporary room for screen sharing and voice. The host picks the number of seats, from 2 to 10 (3 by default), when starting a room; open the link, choose a name, and invite your friends. Calls are peer-to-peer, so whoever shares their screen uploads one copy per viewer: big rooms need fast upload. Multiple people can share at once. Invite links expire after 1 hour without a call. Cloudflare stores invites durably; Bun keeps them in memory until restart. There are no accounts or recordings.
+A temporary room for screen sharing and voice. The host picks the number of seats, from 2 to 10 (3 by default), when starting a room; open the link, choose a name, and invite your friends. Calls are peer-to-peer, so whoever shares their screen uploads one copy per viewer: big rooms need fast upload. Multiple people can share at once, chat, and send each other files. Invite links expire after 1 hour without a call. Cloudflare stores invites durably; Bun keeps them in memory until restart. There are no accounts or recordings.
 
 ## Quick start
 
@@ -59,6 +59,18 @@ Video prefers AV1, then VP9, with browser codec fallback. These presets request 
 Each sharer uploads a separate copy to each viewer, even through TURN. Allow extra bandwidth for transport overhead and up to 128 kbps per audio track per viewer. Multiple simultaneous shares add their own upload costs. The Stats panel shows actual codec, resolution, frame rate, bitrate, and connection route.
 
 Voice uses Opus with the browser's echo cancellation and noise suppression. Screen-share audio is sent in stereo with no voice processing.
+
+## Chat and files
+
+Open **Chat** in the call controls to message the room. Messages travel over the signaling connection. People who join later see the recent history: the newest 100 messages, up to 256 KiB. Each person can send 10 messages in a burst, then one per second. History lives only in server memory. It disappears when the last person leaves, even if they reconnect a moment later, and when the server or Durable Object restarts.
+
+Attach files with the paperclip, or drop them anywhere on the call. A file never touches the server. The chat shows its name and size, and each friend who chooses **Download** receives it directly from the sender's browser over the call's peer connection. The receiver checks the whole file against the sender's SHA-256 before offering **Save**. If the receiver's connection to the room drops, the download pauses and continues from where it stopped once the call reconnects.
+
+Limits:
+
+- Each file can be up to 1 GiB. A receiver can hold up to 2 GiB of downloads at once, counting files still arriving and finished files not yet dismissed.
+- The sender must stay in the room with the tab open until everyone has the file. If the sender leaves or reconnects, their earlier files can no longer be downloaded; share them again.
+- Received files stay in the tab's memory until saved and dismissed, or until the tab leaves the room.
 
 ## Browser limits
 
