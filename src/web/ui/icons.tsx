@@ -75,3 +75,23 @@ export const CloseIcon = (p: P) => (
     <path d="M6 6l12 12M18 6L6 18" />
   </Svg>
 );
+export const ChatIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M20 12.5a7.5 7.5 0 0 1-11 6.6L4 20.5l1.4-4.6A7.5 7.5 0 1 1 20 12.5z" />
+  </Svg>
+);
+export const AttachIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7.1-7.1l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7" />
+  </Svg>
+);
+export const SendIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 19V5M6 11l6-6 6 6" />
+  </Svg>
+);
+export const DownloadIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" />
+  </Svg>
+);

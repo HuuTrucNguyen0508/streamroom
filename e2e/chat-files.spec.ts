@@ -1,0 +1,293 @@
+// End-to-end: chat over signaling and files peer-to-peer, in real headless browsers.
+
+import { createHash, randomBytes } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
+import { expect, test, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import WebSocket from "ws";
+
+interface Friend {
+  context: BrowserContext;
+  page: Page;
+  name: string;
+}
+
+async function open(browser: Browser, name: string): Promise<Friend> {
+  const context = await browser.newContext({ acceptDownloads: true });
+  const page = await context.newPage();
+  page.on("pageerror", (err) => console.log(`[${name}] pageerror: ${err.message}`));
+  page.on("console", (m) => {
+    if (m.type() === "error") console.log(`[${name}] ${m.type()}: ${m.text()}`);
+  });
+  return { context, page, name };
+}
+
+async function createRoom(f: Friend, baseURL: string, seats = 4): Promise<string> {
+  if (process.env.E2E_HOST_PASSPHRASE) {
+    await f.context.request.post(`${baseURL}/api/host-session`, { headers: { Origin: baseURL }, data: { passphrase: process.env.E2E_HOST_PASSPHRASE } });
+  }
+  await f.page.goto(`/?seats=${seats}`);
+  await expect(f.page).toHaveURL(/\/r\/[A-Za-z0-9_-]{22}$/);
+  return f.page.url();
+}
+
+async function join(f: Friend, url: string): Promise<void> {
+  if (f.page.url() !== url) await f.page.goto(url);
+  await f.page.getByLabel("Your name").fill(f.name);
+  const button = f.page.getByRole("button", { name: "Join room", exact: true });
+  await expect(button).toBeEnabled();
+  await button.click();
+  await expect(f.page.locator('[data-screen="call"][data-phase="in-call"]')).toBeVisible();
+}
+
+async function openChat(f: Friend): Promise<void> {
+  if ((await f.page.getByTestId("chat-panel").count()) === 0) await f.page.getByTestId("chat-toggle").click();
+  await expect(f.page.getByTestId("chat-panel")).toBeVisible();
+}
+
+async function say(f: Friend, text: string): Promise<void> {
+  await openChat(f);
+  await f.page.getByTestId("chat-input").fill(text);
+  await f.page.getByTestId("chat-input").press("Enter");
+  await expect(f.page.getByTestId("chat-input")).toHaveValue("");
+}
+
+const messages = (f: Friend) => f.page.getByTestId("chat-message");
+const card = (f: Friend, name: string): Locator => f.page.locator(`[data-testid="file-card"][data-name="${name}"]`);
+
+async function share(f: Friend, path: string): Promise<void> {
+  await openChat(f);
+  await f.page.getByTestId("chat-file-input").setInputFiles(path);
+}
+
+async function randomFile(path: string, bytes: number): Promise<string> {
+  const data = randomBytes(bytes);
+  await writeFile(path, data);
+  return createHash("sha256").update(data).digest("hex");
+}
+
+async function saveAndHash(f: Friend, name: string): Promise<string> {
+  const downloaded = f.page.waitForEvent("download");
+  await card(f, name).getByRole("button", { name: "Save" }).click();
+  const download = await downloaded;
+  expect(download.suggestedFilename()).toBe(name);
+  return createHash("sha256").update(await readFile((await download.path())!)).digest("hex");
+}
+
+/** Records every state and byte count a card shows, so a test can tell a resume from a restart. */
+async function recordCard(f: Friend, name: string): Promise<() => Promise<{ state: string; received: number; at: number }[]>> {
+  await f.page.evaluate((fileName) => {
+    const log: { state: string; received: number; at: number }[] = [];
+    (window as unknown as { __cardLog: typeof log }).__cardLog = log;
+    const sample = () => {
+      const el = document.querySelector(`[data-testid="file-card"][data-name="${fileName}"]`);
+      if (!el) return;
+      const entry = { state: el.getAttribute("data-state") ?? "", received: Number(el.getAttribute("data-received") ?? -1), at: Math.round(performance.now()) };
+      const last = log.at(-1);
+      if (!last || last.state !== entry.state || last.received !== entry.received) log.push(entry);
+    };
+    new MutationObserver(sample).observe(document.body, { subtree: true, attributes: true, childList: true });
+  }, name);
+  return () => f.page.evaluate(() => (window as unknown as { __cardLog: { state: string; received: number; at: number }[] }).__cardLog);
+}
+
+async function receivedOf(f: Friend, name: string): Promise<number> {
+  return Number((await card(f, name).getAttribute("data-received")) ?? 0);
+}
+
+test.describe.configure({ mode: "serial" });
+
+test("chat: both ways, unread badge, history for a late joiner, and typing m doesn't mute", async ({ browser, baseURL }) => {
+  const ada = await open(browser, "Ada");
+  const ben = await open(browser, "Ben");
+  const cy = await open(browser, "Cy");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await join(ben, room);
+
+  await say(ada, "Movie at nine?");
+  await expect(ben.page.getByTestId("chat-badge")).toHaveText("1");
+  await openChat(ben);
+  await expect(ben.page.getByTestId("chat-badge")).toHaveCount(0);
+  await expect(messages(ben)).toHaveText(["Movie at nine?"]);
+
+  const muteButton = ben.page.getByTestId("mute");
+  const mutedBefore = await muteButton.getAttribute("aria-pressed");
+  await ben.page.getByTestId("chat-input").pressSequentially("mmm, I'm in");
+  await ben.page.getByTestId("chat-input").press("Shift+Enter");
+  await ben.page.getByTestId("chat-input").pressSequentially("bring snacks");
+  await ben.page.getByTestId("chat-input").press("Enter");
+  if (mutedBefore !== null) await expect(muteButton).toHaveAttribute("aria-pressed", mutedBefore);
+  await expect(messages(ada)).toHaveText(["Movie at nine?", "mmm, I'm in\nbring snacks"]);
+
+  await join(cy, room);
+  await expect(cy.page.getByTestId("chat-badge")).toHaveText("2");
+  await openChat(cy);
+  await expect(messages(cy)).toHaveText(["Movie at nine?", "mmm, I'm in\nbring snacks"]);
+  await say(cy, "Same");
+  for (const f of [ada, ben]) await expect(messages(f)).toHaveText(["Movie at nine?", "mmm, I'm in\nbring snacks", "Same"]);
+
+  for (const f of [ada, ben, cy]) await f.context.close();
+});
+
+test("chat: a late joiner gets the largest history the room keeps", async ({ browser, baseURL }) => {
+  const ada = await open(browser, "Ada");
+  const room = await createRoom(ada, baseURL!, 10);
+  const roomId = room.split("/r/")[1]!;
+  const longest = "€".repeat(1996);
+  const sockets: WebSocket[] = [];
+  // Eight members, ten messages each: their bursts fill the history past its byte budget.
+  for (let i = 0; i < 8; i++) {
+    const ws = new WebSocket(`${baseURL!.replace(/^http/, "ws")}/ws?room=${roomId}`);
+    sockets.push(ws);
+    await new Promise<void>((resolve, reject) => { ws.once("open", resolve); ws.once("error", reject); });
+    const joined = new Promise<void>((resolve) => ws.on("message", (d) => { if (JSON.parse(String(d)).t === "joined") resolve(); }));
+    ws.send(JSON.stringify({ t: "join", room: roomId, name: `Bot ${i}`, resume: null, state: { muted: true, hasMic: false, share: null } }));
+    await joined;
+    for (let n = 0; n < 10; n++) ws.send(JSON.stringify({ t: "chat", body: { kind: "text", text: `${i}.${n} ${longest}` } }));
+  }
+  const last = `7.9 ${longest}`;
+  try {
+    await join(ada, room);
+    await openChat(ada);
+    await expect(messages(ada).last()).toHaveText(last);
+    const count = await messages(ada).count();
+    console.log(`history after 80 messages of 2000 characters: ${count} entries`);
+    expect(count).toBeGreaterThan(30);
+    expect(count).toBeLessThan(80);
+  } finally {
+    for (const ws of sockets) ws.close();
+    await ada.context.close();
+  }
+});
+
+test("files: a 5 MiB file goes peer to peer and its SHA-256 matches", async ({ browser, baseURL }, testInfo) => {
+  const ada = await open(browser, "Ada");
+  const ben = await open(browser, "Ben");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await join(ben, room);
+  const path = testInfo.outputPath("holiday.bin");
+  const digest = await randomFile(path, 5 * 1024 * 1024 + 123);
+
+  await share(ada, path);
+  await expect(card(ada, "holiday.bin")).toHaveAttribute("data-state", "offer");
+  await openChat(ben);
+  await expect(card(ben, "holiday.bin")).toHaveAttribute("data-state", "available");
+  const log = await recordCard(ben, "holiday.bin");
+  await card(ben, "holiday.bin").getByRole("button", { name: "Download" }).click();
+  await expect(card(ben, "holiday.bin")).toHaveAttribute("data-state", "done");
+  const states = await log();
+  console.log(`5 MiB: requested to verified in ${states.at(-1)!.at - states.find((s) => s.state === "requesting")!.at} ms`);
+  expect(await saveAndHash(ben, "holiday.bin")).toBe(digest);
+  await expect(card(ada, "holiday.bin")).toContainText("Ben has it");
+
+  for (const f of [ada, ben]) await f.context.close();
+});
+
+test("files: a receiver whose connection to the room drops mid-transfer resumes and still verifies", async ({ browser, baseURL }, testInfo) => {
+  const ada = await open(browser, "Ada");
+  const ben = await open(browser, "Ben");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await join(ben, room);
+  const path = testInfo.outputPath("film.bin");
+  const size = 160 * 1024 * 1024;
+  const digest = await randomFile(path, size);
+  await share(ada, path);
+  await openChat(ben);
+  const log = await recordCard(ben, "film.bin");
+  await card(ben, "film.bin").getByRole("button", { name: "Download" }).click();
+  await expect.poll(() => receivedOf(ben, "film.bin"), { intervals: [50] }).toBeGreaterThan(size / 10);
+
+  const idBefore = await ben.page.evaluate(() => (window as unknown as { __streamroom: { view: { selfId: string } } }).__streamroom.view.selfId);
+  await ben.page.evaluate(() => (window as unknown as { __streamroom: { sig: { ws: WebSocket } } }).__streamroom.sig.ws.close());
+  await expect(card(ben, "film.bin")).toHaveAttribute("data-state", "done", { timeout: 60_000 });
+  const idAfter = await ben.page.evaluate(() => (window as unknown as { __streamroom: { view: { selfId: string } } }).__streamroom.view.selfId);
+  expect(idAfter).not.toBe(idBefore);
+
+  const states = await log();
+  const paused = states.findIndex((s) => s.state === "paused");
+  expect(paused, JSON.stringify(states.map((s) => s.state))).toBeGreaterThan(0);
+  const before = states[paused]!.received;
+  const resumed = states.slice(paused).find((s) => s.state === "receiving");
+  console.log(`paused at ${before} of ${size} bytes; next progress ${resumed?.received}`);
+  expect(before).toBeGreaterThan(0);
+  expect(before).toBeLessThan(size);
+  expect(states.slice(paused).every((s) => s.state === "done" || s.received >= before)).toBe(true);
+  expect(await saveAndHash(ben, "film.bin")).toBe(digest);
+
+  for (const f of [ada, ben]) await f.context.close();
+});
+
+test("files: cancel stops a download, and a sender leaving fails one in progress", async ({ browser, baseURL }, testInfo) => {
+  const ada = await open(browser, "Ada");
+  const ben = await open(browser, "Ben");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await join(ben, room);
+  const path = testInfo.outputPath("archive.bin");
+  const size = 160 * 1024 * 1024;
+  await randomFile(path, size);
+  await share(ada, path);
+  await openChat(ben);
+
+  await card(ben, "archive.bin").getByRole("button", { name: "Download" }).click();
+  await expect.poll(() => receivedOf(ben, "archive.bin"), { intervals: [50] }).toBeGreaterThan(0);
+  await expect(card(ada, "archive.bin")).toContainText("Ben");
+  await card(ben, "archive.bin").getByRole("button", { name: "Cancel" }).click();
+  await expect(card(ben, "archive.bin")).toHaveAttribute("data-state", "available");
+  await expect(card(ada, "archive.bin")).toContainText("Shared from this tab");
+
+  await card(ben, "archive.bin").getByRole("button", { name: "Download" }).click();
+  await expect.poll(() => receivedOf(ben, "archive.bin"), { intervals: [50] }).toBeGreaterThan(0);
+  await ada.page.getByTestId("leave").click();
+  await expect(card(ben, "archive.bin")).toHaveAttribute("data-state", "failed");
+  await expect(card(ben, "archive.bin")).toContainText("Ada left before the file finished.");
+  await expect(card(ben, "archive.bin").getByRole("button")).toHaveCount(0);
+
+  for (const f of [ada, ben]) await f.context.close();
+});
+
+test("screenshots of the chat panel", async ({ browser, baseURL }, testInfo) => {
+  test.skip(process.env.SCREENSHOTS !== "1", "Set SCREENSHOTS=1 to refresh docs/screenshots.");
+  const [ada, ben, cy, dee] = await Promise.all([open(browser, "Ada"), open(browser, "Ben"), open(browser, "Cy"), open(browser, "Dee")]);
+  const room = await createRoom(ada, baseURL!, 4);
+  for (const f of [ada, ben, cy, dee]) await join(f, room);
+  const file = async (name: string, bytes: number) => {
+    const path = testInfo.outputPath(name);
+    await randomFile(path, bytes);
+    return path;
+  };
+
+  await share(dee, await file("poster-draft.png", 2_400_000));
+  await say(dee, "Have to run, enjoy the film!");
+  await dee.page.getByTestId("leave").click();
+  await say(ada, "Sound check okay? I'll start in five.");
+  await say(cy, "Loud and clear");
+  await share(ada, await file("subtitles-en.srt", 84_000));
+  await share(ada, await file("trailer-final.mp4", 160 * 1024 * 1024));
+  await say(ada, "Subtitles and the trailer, in case your stream stutters.");
+  await openChat(ben);
+  await card(ben, "subtitles-en.srt").getByRole("button", { name: "Download" }).click();
+  await expect(card(ben, "subtitles-en.srt")).toHaveAttribute("data-state", "done");
+  await say(ben, "Got the subs, thanks.\nGrabbing popcorn, back in a sec");
+  await share(ben, await file("snack-list.txt", 1_800));
+  await card(ada, "snack-list.txt").getByRole("button", { name: "Download" }).click();
+  await expect(card(ben, "snack-list.txt")).toContainText("Ada has it");
+
+  await ada.page.getByTestId("share").click();
+  await ada.page.getByTestId("preset-motion").click();
+  await expect(ben.page.getByTestId("stage")).toBeVisible();
+  await card(ben, "trailer-final.mp4").getByRole("button", { name: "Download" }).click();
+  await expect.poll(() => receivedOf(ben, "trailer-final.mp4"), { intervals: [50] }).toBeGreaterThan(40 * 1024 * 1024);
+  await ben.page.waitForTimeout(1100);
+  await ben.page.screenshot({ path: "docs/screenshots/chat.png" });
+
+  await ben.page.setViewportSize({ width: 390, height: 844 });
+  await expect(card(ben, "trailer-final.mp4")).toHaveAttribute("data-state", "done", { timeout: 60_000 });
+  await ben.page.getByTestId("chat-log").evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await ben.page.waitForTimeout(300);
+  await ben.page.screenshot({ path: "docs/screenshots/chat-mobile.png" });
+
+  for (const f of [ada, ben, cy, dee]) await f.context.close();
+});
