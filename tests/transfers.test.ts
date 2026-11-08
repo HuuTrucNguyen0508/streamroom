@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { FileId, FileMeta, MemberId } from "../src/shared/protocol.ts";
 import { FileTransfers } from "../src/web/rtc/transfers.ts";
 
@@ -13,10 +13,12 @@ class Channel extends EventTarget {
   onerror = null;
   onbufferedamountlow = null;
   sent: unknown[] = [];
+  autoDrain = false;
   constructor(readonly label: string) { super(); }
   send(value: string | Uint8Array) {
     this.sent.push(value);
     this.bufferedAmount += typeof value === "string" ? value.length : value.byteLength;
+    if (this.autoDrain) queueMicrotask(() => this.drain());
   }
   close() { this.readyState = "closed"; this.onclose?.(); this.dispatchEvent(new Event("close")); }
   receive(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
@@ -61,16 +63,36 @@ it("holds both send slots until buffered data drains", async () => {
   expect(opened).toHaveLength(3);
 });
 it("cancel stops further reads and sends and aborts shared hashing after its last request", async () => {
-  const {t, ctl, opened} = setup();
-  t.offer({...meta,size:32*1024*1024}, new Blob([new Uint8Array(32*1024*1024)]));
-  ctl.receive({t:"get",file:meta.id,transfer:"attempt00001",offset:0});
-  await tick();
-  ctl.receive({t:"cancel",transfer:"attempt00001"});
-  await tick();
-  const before = {...t.activity};
-  await tick();
-  expect(t.activity).toEqual(before);
-  expect(opened[0]!.readyState).toBe("closed");
-  expect(t.view().outgoing.size).toBe(0);
+  vi.useFakeTimers();
+  try {
+    const {t, ctl, opened} = setup();
+    const releases: (() => void)[] = [];
+    let started!: () => void;
+    const readsStarted = new Promise<void>((resolve) => { started = resolve; });
+    const blob = new Blob([new Uint8Array(32*1024*1024)]);
+    vi.spyOn(blob, "slice").mockImplementation((start = 0, end = blob.size) => {
+      const block = new Blob();
+      block.arrayBuffer = () => new Promise<ArrayBuffer>((resolve) => {
+        releases.push(() => resolve(new ArrayBuffer(end - start)));
+        if (releases.length === 2) started();
+      });
+      return block;
+    });
+    t.offer({...meta,size:blob.size}, blob);
+    ctl.receive({t:"get",file:meta.id,transfer:"attempt00001",offset:0});
+    await readsStarted;
+    opened[0]!.autoDrain = true;
+    ctl.receive({t:"cancel",transfer:"attempt00001"});
+    const before = {...t.activity};
+    const sent = opened[0]!.sent.length;
+    for (const release of releases) release();
+    await vi.runAllTimersAsync();
+    expect(t.activity).toEqual(before);
+    expect(opened[0]!.sent).toHaveLength(sent);
+    expect(opened[0]!.readyState).toBe("closed");
+    expect(t.view().outgoing.size).toBe(0);
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  }
 });
-
