@@ -372,6 +372,12 @@ test("chat: Escape closes an open menu first, waits out IME composition, and the
   await expect(ada.page.getByTestId("chat-toggle")).toBeFocused();
   await openChat(ada);
   await expect(input).toHaveValue("half a thought");
+
+  await ada.page.getByTestId("share").click();
+  await ada.page.keyboard.press("Escape");
+  await ada.page.keyboard.press("Escape");
+  await expect(ada.page.getByRole("menu")).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
   await ada.context.close();
 });
 

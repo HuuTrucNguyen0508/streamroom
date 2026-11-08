@@ -96,15 +96,18 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
     return () => observer.disconnect();
   }, [view.chat]);
 
+  // Effects run after paint, so a listener closed over props would miss a menu that just closed.
+  const latest = useRef({ onClose, menuOpen });
+  latest.current = { onClose, menuOpen };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.isComposing || e.keyCode === 229 || e.defaultPrevented || menuOpen) return;
+      if (e.key !== "Escape" || e.isComposing || e.keyCode === 229 || e.defaultPrevented || latest.current.menuOpen) return;
       e.preventDefault();
-      onClose();
+      latest.current.onClose();
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose, menuOpen]);
+  }, []);
 
   useLayoutEffect(() => {
     const input = inputRef.current;

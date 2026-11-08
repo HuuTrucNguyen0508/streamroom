@@ -95,9 +95,11 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
     return () => { media.removeEventListener("change", update); observer.disconnect(); };
   }, [chatOpen]);
 
+  const menuOpen = useRef(false);
+  menuOpen.current = menu !== null;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && menu !== null && !e.isComposing && e.keyCode !== 229 && !e.defaultPrevented) {
+      if (e.key === "Escape" && menuOpen.current && !e.isComposing && e.keyCode !== 229 && !e.defaultPrevented) {
         e.preventDefault();
         setMenu(null);
         return;
@@ -110,7 +112,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [call, view.self.hasMic, view.self.muted, menu]);
+  }, [call, view.self.hasMic, view.self.muted]);
 
   useEffect(() => {
     if (!toast) return;
