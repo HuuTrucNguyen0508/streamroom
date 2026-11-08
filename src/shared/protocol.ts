@@ -152,28 +152,29 @@ function isObject(v: unknown): v is Json {
 
 export function cleanName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  // Strip control and bidi-override characters, collapse whitespace.
   const name = raw
-    .replace(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, "")
+    .replace(INVISIBLE_CHARS, "")
+    .replace(/[\p{Cc}]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
   if (name.length === 0) return null;
   return Array.from(name).slice(0, MAX_NAME_LENGTH).join("");
 }
 
-const UNSAFE_CHARS = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const INVISIBLE_CHARS = /[\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u2800\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
+const UNSAFE_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** Keeps newlines, strips other control and bidi-override characters, trims. Null when empty or too long. */
 export function cleanChatText(raw: unknown): string | null {
   if (typeof raw !== "string" || raw.length > MAX_CHAT_TEXT * 2) return null;
-  const text = raw.replace(/\r\n?/g, "\n").replace(UNSAFE_CHARS, "").trim();
+  const text = raw.replace(/\r\n?/g, "\n").replace(UNSAFE_CHARS, "").replace(INVISIBLE_CHARS, "").replace(/\n(?:[ \t]*\n){3,}/g, "\n\n\n").trim();
   return text.length === 0 || text.length > MAX_CHAT_TEXT ? null : text;
 }
 
 /** A name that is safe to show and to save under: no control, bidi or path characters. */
 export function cleanFileName(raw: unknown): string | null {
   if (typeof raw !== "string" || raw.length > MAX_FILE_NAME * 4) return null;
-  const name = raw.replace(UNSAFE_CHARS, "").replace(/[\n/\\]/g, "_").trim();
+  const name = raw.replace(UNSAFE_CHARS, "").replace(INVISIBLE_CHARS, "").replace(/[\t\n/\\]/g, "_").trim();
   if (name.length === 0 || name === "." || name === "..") return null;
   return Array.from(name).slice(0, MAX_FILE_NAME).join("");
 }

@@ -76,7 +76,7 @@ describe("chat messages", () => {
   const chat = (body: unknown) => parseClientMessage(JSON.stringify({ t: "chat", body }));
 
   it("keeps newlines and strips other control and bidi characters from text", () => {
-    expect(chat({ kind: "text", text: "  hi\r\nthere\u0007‮!\t " })).toEqual({ t: "chat", body: { kind: "text", text: "hi\nthere!" } });
+    expect(chat({ kind: "text", text: "  hi\r\nthere\u0007‮!\tcode " })).toEqual({ t: "chat", body: { kind: "text", text: "hi\nthere!\tcode" } });
   });
 
   it("refuses empty and overlong text instead of truncating it", () => {
@@ -113,3 +113,10 @@ describe("chat messages", () => {
     expect(chat("hi")).toBeNull();
   });
 });
+
+ it("strips invisible file-name spoofing and collapses excess blank lines", () => {
+   const hidden = "\u200b\u2028\u2029\u2800\u3164\u115f\u1160\uffa0";
+   expect(cleanName(`A${hidden}da`)).toBe("Ada");
+   expect(parseClientMessage(JSON.stringify({t:"chat", body:{kind:"file",file:{id:"AAAAAAAAAAAAAAAA",name:`photo${hidden}.exe`,size:1,mime:""}}}))).toMatchObject({body:{file:{name:"photo.exe"}}});
+   expect(parseClientMessage(JSON.stringify({t:"chat",body:{kind:"text",text:`one${hidden}\n\n\n\n\n\ttwo`}}))).toMatchObject({body:{text:"one\n\n\n\ttwo"}});
+ });

@@ -254,3 +254,15 @@ describe("Rooms chat", () => {
     expect(rooms.chat("ghost", text("hi"))).toEqual([{ kind: "send", to: "ghost", msg: { t: "error", code: "not_joined", message: "Join a room first." } }]);
   });
 });
+
+it("carries chat rate limits through replacement and disconnected resume", () => {
+  const { rooms } = setup();
+  const a = joinOk(rooms, "a");
+  joinOk(rooms, "b");
+  for (let i=0; i<10; i++) rooms.chat("a", {kind:"text",text:"hello"});
+  const c = joinOk(rooms, "c", ROOM, a.joined.resume);
+  expect(sent(rooms.chat("c", {kind:"text",text:"blocked"}), "c")).toMatchObject([{t:"error",code:"slow_down"}]);
+  rooms.leave("c");
+  joinOk(rooms, "d", ROOM, c.joined.resume);
+  expect(sent(rooms.chat("d", {kind:"text",text:"still blocked"}), "d")).toMatchObject([{t:"error",code:"slow_down"}]);
+});

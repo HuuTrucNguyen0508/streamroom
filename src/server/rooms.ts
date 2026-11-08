@@ -54,6 +54,8 @@ interface Room {
 }
 
 interface Departed {
+  chatTokens: number;
+  chatRefilledAt: number;
   roomId: RoomId;
   expiresAt: number;
 }
@@ -124,11 +126,13 @@ export class Rooms {
     let room = this.rooms.get(roomId);
     let inheritHost = false;
     let mayPassLock = false;
+    let bucket: Pick<Member, "chatTokens" | "chatRefilledAt"> | undefined;
 
     if (resume !== null && room) {
       const stale = room.members.find((m) => m.resume === resume);
       if (stale) {
         // Half-open socket from the same client: drop the old presence first.
+        bucket = stale;
         inheritHost = room.hostId === stale.id;
         mayPassLock = true;
         effects.push({ kind: "close", to: stale.conn, reason: "replaced" });
@@ -140,6 +144,7 @@ export class Rooms {
       const gone = this.departed.get(resume);
       if (gone && gone.roomId === roomId) {
         mayPassLock = true;
+        bucket = gone;
         this.departed.delete(resume);
       }
     }
@@ -153,7 +158,7 @@ export class Rooms {
     }
 
     const member: Member = {
-      id: this.makeId(9) as MemberId, conn, name, state, resume: this.makeId(18), chatTokens: CHAT_BURST, chatRefilledAt: this.now(),
+      id: this.makeId(9) as MemberId, conn, name, state, resume: this.makeId(18), chatTokens: bucket?.chatTokens ?? CHAT_BURST, chatRefilledAt: bucket?.chatRefilledAt ?? this.now(),
     };
     for (const other of room.members) {
       effects.push({ kind: "send", to: other.conn, msg: { t: "member-joined", member: publicInfo(member) } });
@@ -181,7 +186,7 @@ export class Rooms {
     this.byConn.delete(conn);
     room.members = room.members.filter((m) => m !== member);
     const wasHost = room.hostId === member.id;
-    this.departed.set(member.resume, { roomId: room.id, expiresAt: this.now() + this.resumeGraceMs });
+    this.departed.set(member.resume, { chatTokens: member.chatTokens, chatRefilledAt: member.chatRefilledAt, roomId: room.id, expiresAt: this.now() + this.resumeGraceMs });
 
     if (room.members.length === 0) {
       this.rooms.delete(room.id);
