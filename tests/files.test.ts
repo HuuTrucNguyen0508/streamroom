@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FileId, FileMeta, MemberId } from "../src/shared/protocol.ts";
 import { Incoming, hashFile, parseCtl, parseEnd, type TransferId } from "../src/web/rtc/files.ts";
 
@@ -163,4 +163,24 @@ describe("control messages", () => {
     expect(parseEnd(JSON.stringify({ t: "end", sha256: "A".repeat(64) }))).toBeNull();
     expect(parseEnd(JSON.stringify({ t: "end", sha256: "a".repeat(63) }))).toBeNull();
   });
+});
+
+it("stops hashing before reading another block after abort", async () => {
+  const abort = new AbortController();
+  let reads = 0;
+  const file = new Blob([new Uint8Array(9 * 1024 * 1024)]);
+  await expect(hashFile(file, abort.signal, () => { reads++; abort.abort(); })).rejects.toThrow();
+  expect(reads).toBe(1);
+});
+
+it("releases retained parts when a batch Blob allocation fails", () => {
+  const { meta } = fileOf(16 * 1024 * 1024);
+  const incoming = new Incoming(SENDER, meta);
+  incoming.request(A1); incoming.accept(A1);
+  vi.stubGlobal("Blob", class { constructor() { throw new Error("oom"); } });
+  try {
+    expect(() => incoming.chunk(A1, new Uint8Array(meta.size))).not.toThrow();
+    expect(incoming.phase).toEqual({kind:"failed",reason:"memory"});
+    expect(incoming.retained).toBe(0);
+  } finally { vi.unstubAllGlobals(); }
 });

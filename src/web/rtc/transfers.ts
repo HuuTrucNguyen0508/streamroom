@@ -36,6 +36,7 @@ interface Offer {
   file: Blob;
   /** Hashed on the first request, then reused for every receiver. */
   digest: Promise<string> | null;
+  hashing: AbortController | null;
 }
 
 export type SendPhase = "queued" | "sending" | "sent" | "delivered";
@@ -47,6 +48,7 @@ interface Send {
   offset: number;
   sent: number;
   phase: SendPhase;
+  busy: boolean;
   abort: AbortController;
 }
 
@@ -86,6 +88,8 @@ export class FileTransfers {
   private readonly rates = new Map<string, { at: number; received: number; bytesPerSec: number }>();
   private progressTimer: ReturnType<typeof setTimeout> | null = null;
 
+  readonly activity = { reads: 0, sends: 0 };
+
   constructor(private readonly links: TransferLinks) {}
 
   // ---------------------------------------------------------------------------
@@ -103,8 +107,9 @@ export class FileTransfers {
   }
 
   private bindCtl(member: MemberId, dc: RTCDataChannel): void {
+    if (this.ctl.has(member)) { dc.close(); return; }
+    this.ctl.set(member, dc);
     const opened = () => {
-      this.ctl.set(member, dc);
       for (const incoming of this.incoming.values()) if (incoming.from === member) this.startAttempt(incoming);
       this.links.changed();
     };
@@ -199,7 +204,11 @@ export class FileTransfers {
     dc.onmessage = (ev) => {
       if (this.attempts.get(id) !== attempt) return;
       if (typeof ev.data !== "string") {
-        incoming.chunk(id, new Uint8Array(ev.data as ArrayBuffer));
+        try {
+          incoming.chunk(id, new Uint8Array(ev.data as ArrayBuffer));
+        } catch {
+          incoming.fail("memory");
+        }
         if (incoming.phase.kind === "failed") {
           this.sendCtl(incoming.from, { t: "cancel", transfer: id });
           this.endAttempt(id);
@@ -238,12 +247,13 @@ export class FileTransfers {
   // Sending
 
   offer(meta: FileMeta, file: Blob): void {
-    this.offers.set(meta.id, { meta, file, digest: null });
+    this.offers.set(meta.id, { meta, file, digest: null, hashing: null });
     this.links.changed();
   }
 
   /** Stop offering a file: active and future requests fail as gone. */
   unshare(file: FileId): void {
+    this.offers.get(file)?.hashing?.abort();
     this.offers.delete(file);
     for (const send of this.sends.values()) {
       if (send.file !== file) continue;
@@ -270,7 +280,7 @@ export class FileTransfers {
         // A new attempt for the same file replaces any older one to this member.
         for (const send of this.sends.values()) if (send.to === member && send.file === msg.file) this.dropSend(send);
         this.sends.set(msg.transfer, {
-          id: msg.transfer, to: member, file: msg.file, offset: msg.offset, sent: msg.offset, phase: "queued", abort: new AbortController(),
+          id: msg.transfer, to: member, file: msg.file, offset: msg.offset, sent: msg.offset, phase: "queued", busy: false, abort: new AbortController(),
         });
         this.pumpQueue(member);
         this.links.changed();
@@ -301,17 +311,19 @@ export class FileTransfers {
 
   private pumpQueue(member: MemberId): void {
     let active = 0;
-    for (const send of this.sends.values()) if (send.to === member && send.phase === "sending") active++;
+    for (const send of this.sends.values()) if (send.to === member && send.busy) active++;
     for (const send of this.sends.values()) {
       if (active >= MAX_ACTIVE_SENDS) return;
       if (send.to !== member || send.phase !== "queued") continue;
       active++;
       send.phase = "sending";
+      send.busy = true;
       void this.pump(send)
         .catch(() => {
           if (this.sends.get(send.id) === send && send.phase === "sending") this.dropSend(send);
         })
         .finally(() => {
+          send.busy = false;
           this.pumpQueue(member);
           this.links.changed();
         });
@@ -329,17 +341,28 @@ export class FileTransfers {
     // The receiver closes the channel after the end marker, or to cancel.
     dc.onclose = () => send.abort.abort();
     await opened(dc, signal);
-    offer.digest ??= hashFile(offer.file);
+    if (!offer.digest) {
+      offer.hashing = new AbortController();
+      const hashing = offer.hashing;
+      offer.digest = hashFile(offer.file, hashing.signal, () => this.activity.reads++).then((digest) => {
+        if (offer.hashing === hashing) offer.hashing = null;
+        return digest;
+      });
+      void offer.digest.catch(() => {});
+    }
     const max = this.links.maxMessageSize(send.to);
     const chunk = max > 0 ? Math.min(CHUNK_BYTES, max) : CHUNK_BYTES;
     const size = offer.meta.size;
     let offset = send.offset;
     while (offset < size) {
+      signal.throwIfAborted();
+      this.activity.reads++;
       const block = new Uint8Array(await offer.file.slice(offset, Math.min(size, offset + READ_BYTES)).arrayBuffer());
       for (let i = 0; i < block.byteLength; i += chunk) {
         if (dc.bufferedAmount > HIGH_WATER) await drained(dc, signal);
         signal.throwIfAborted();
         dc.send(block.subarray(i, i + chunk));
+        this.activity.sends++;
       }
       offset += block.byteLength;
       send.sent = offset;
@@ -349,11 +372,20 @@ export class FileTransfers {
     signal.throwIfAborted();
     dc.send(JSON.stringify({ t: "end", sha256: digest }));
     send.phase = "sent";
+    dc.bufferedAmountLowThreshold = 0;
+    if (dc.bufferedAmount > 0) await drained(dc, signal);
   }
 
   private dropSend(send: Send): void {
     this.sends.delete(send.id);
     send.abort.abort();
+    const offer = this.offers.get(send.file);
+    if (offer?.hashing && ![...this.sends.values()].some((s) => s.file === send.file && (s.phase === "queued" || s.phase === "sending"))) {
+      offer.hashing?.abort();
+      offer.hashing = null;
+      offer.digest = null;
+    }
+    this.pumpQueue(send.to);
   }
 
   // ---------------------------------------------------------------------------
@@ -383,6 +415,7 @@ export class FileTransfers {
     for (const incoming of this.incoming.values()) incoming.dispose();
     for (const ctl of this.ctl.values()) detach(ctl);
     this.sends.clear();
+    for (const offer of this.offers.values()) offer.hashing?.abort();
     this.offers.clear();
     this.incoming.clear();
     this.ctl.clear();

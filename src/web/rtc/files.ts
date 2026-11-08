@@ -70,10 +70,14 @@ export function parseEnd(raw: unknown): string | null {
   return v?.t === "end" && typeof v.sha256 === "string" && DIGEST_RE.test(v.sha256) ? v.sha256 : null;
 }
 
-export async function hashFile(file: Blob): Promise<string> {
+export async function hashFile(file: Blob, signal?: AbortSignal, onRead?: () => void): Promise<string> {
   const hasher = sha256.create();
   for (let offset = 0; offset < file.size; offset += READ_BYTES) {
-    hasher.update(new Uint8Array(await file.slice(offset, offset + READ_BYTES).arrayBuffer()));
+    signal?.throwIfAborted();
+    onRead?.();
+    const block = await file.slice(offset, offset + READ_BYTES).arrayBuffer();
+    signal?.throwIfAborted();
+    hasher.update(new Uint8Array(block));
   }
   return bytesToHex(hasher.digest());
 }
@@ -132,7 +136,11 @@ export class Incoming {
     this.batch.push(data);
     this.batchBytes += data.byteLength;
     this.received += data.byteLength;
-    if (this.batchBytes >= BATCH_BYTES) this.flush();
+    try {
+      if (this.batchBytes >= BATCH_BYTES) this.flush();
+    } catch {
+      this.fail("memory");
+    }
   }
 
   /** The sender says it's finished. True when the file is complete and its hash matches. */
