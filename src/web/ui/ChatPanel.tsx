@@ -28,20 +28,32 @@ function groupsOf(chat: ChatEntry[]): Group[] {
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
-export function ChatPanel({ call, view, onClose, focusInput }: { call: Call; view: CallView; onClose: () => void; focusInput: boolean }) {
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-  const panelRef = useRef<HTMLElement>(null);
+/** Screen readers read the whole live region; a long paste would drown out the call. */
+const ANNOUNCE_CHARS = 140;
+
+function clip(text: string, max: number): string {
+  const chars = [...text];
+  return chars.length > max ? `${chars.slice(0, max).join("")}…` : text;
+}
+
+export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, setDraft, sending, send }: {
+  call: Call; view: CallView; onClose: () => void; focusInput: boolean; menuOpen: boolean;
+  draft: string; setDraft: (text: string) => void; sending: boolean; send: () => void;
+}) {
+  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 900px)").matches);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pinned = useRef(true);
   const groups = groupsOf(view.chat);
   const last = view.chat.at(-1);
-  const announcement = last ? `${last.name}: ${last.body.kind === "text" ? last.body.text : "shared a file"}` : "";
+  const announcement = last && !view.ownIds.has(last.from) ? `${last.name}: ${last.body.kind === "text" ? clip(last.body.text, ANNOUNCE_CHARS) : "shared a file"}` : "";
 
   useEffect(() => {
-    if (focusInput && !matchMedia("(pointer: coarse)").matches) inputRef.current?.focus();
+    if (matchMedia("(pointer: coarse)").matches) closeRef.current?.focus();
+    else if (focusInput) inputRef.current?.focus();
   }, []);
 
   useEffect(() => {
@@ -49,7 +61,10 @@ export function ChatPanel({ call, view, onClose, focusInput }: { call: Call; vie
     const update = () => {
       const panel = panelRef.current;
       if (!panel) return;
-      if (matchMedia("(max-width: 900px)").matches && viewport) {
+      const narrow = matchMedia("(max-width: 900px)").matches;
+      setMobile(narrow);
+      if (narrow && viewport) {
+        if (Math.abs(viewport.scale - 1) > 0.01) return;
         panel.style.height = `${viewport.height}px`;
         panel.style.top = `${viewport.offsetTop}px`;
       } else { panel.style.height = ""; panel.style.top = ""; }
@@ -80,10 +95,14 @@ export function ChatPanel({ call, view, onClose, focusInput }: { call: Call; vie
   }, [view.chat]);
 
   useEffect(() => {
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.isComposing || e.keyCode === 229 || e.defaultPrevented || menuOpen) return;
+      e.preventDefault();
+      onClose();
+    };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [onClose]);
+  }, [onClose, menuOpen]);
 
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -92,21 +111,12 @@ export function ChatPanel({ call, view, onClose, focusInput }: { call: Call; vie
     input.style.height = `${input.scrollHeight}px`;
   }, [draft]);
 
-  const send = async () => {
-    if (sending) return;
-    const text = draft;
-    setSending(true);
-    const sent = await call.sendChat(text);
-    if (sent) setDraft((current) => current === text ? "" : current);
-    setSending(false);
-  };
-
   return (
-    <aside ref={panelRef} class="chat" aria-label="Chat" data-testid="chat-panel">
-      <p class="sr-only" role="status" aria-live="polite">{announcement}</p>
+    <div ref={panelRef} class="chat" role={mobile ? "dialog" : undefined} aria-modal={mobile ? "true" : undefined} aria-label="Chat" data-testid="chat-panel">
+      <p class="sr-only" role="status" aria-live="polite">{announcement && <span key={last?.seq}>{announcement}</span>}</p>
       <header class="chat-head">
         <h2 class="chat-title">Chat</h2>
-        <button class="btn btn-ghost btn-sm" aria-label="Close chat" onClick={onClose}>
+        <button ref={closeRef} class="btn btn-ghost btn-sm" aria-label="Close chat" onClick={onClose}>
           <CloseIcon width={18} height={18} />
         </button>
       </header>
@@ -194,7 +204,7 @@ export function ChatPanel({ call, view, onClose, focusInput }: { call: Call; vie
           <SendIcon />
         </button>
       </form>
-    </aside>
+    </div>
   );
 }
 

@@ -45,6 +45,25 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const chatToggle = useRef<HTMLButtonElement>(null);
   const closeChat = () => { setChatOpen(false); requestAnimationFrame(() => chatToggle.current?.focus()); };
   const [chatOpen, setChatOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const sendInFlight = useRef(false);
+  const sendChat = async () => {
+    if (sendInFlight.current) return;
+    const text = draft;
+    sendInFlight.current = true;
+    setSending(true);
+    setDraft("");
+    let sent = false;
+    try {
+      sent = await call.sendChat(text);
+    } catch (err) {
+      console.warn(err);
+    }
+    sendInFlight.current = false;
+    setSending(false);
+    if (!sent) setDraft((typed) => (typed ? `${text}\n${typed}` : text));
+  };
   const [dropping, setDropping] = useState(false);
   const shares = sharesOf(view);
   const stage = shares.find((s) => s.id === stageId) ?? shares[0] ?? null;
@@ -71,11 +90,18 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
     };
     update();
     media.addEventListener("change", update);
-    return () => { media.removeEventListener("change", update); };
+    const observer = new MutationObserver(update);
+    if (callRef.current) observer.observe(callRef.current, { childList: true });
+    return () => { media.removeEventListener("change", update); observer.disconnect(); };
   }, [chatOpen]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && menu !== null && !e.isComposing && e.keyCode !== 229 && !e.defaultPrevented) {
+        e.preventDefault();
+        setMenu(null);
+        return;
+      }
       const t = e.target;
       const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || (t instanceof HTMLElement && t.isContentEditable);
       if (typing || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -84,7 +110,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [call, view.self.hasMic, view.self.muted]);
+  }, [call, view.self.hasMic, view.self.muted, menu]);
 
   useEffect(() => {
     if (!toast) return;
@@ -314,7 +340,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </div>
       </footer>
 
-      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} />}
+      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} menuOpen={menu !== null} draft={draft} setDraft={setDraft} sending={sending} send={sendChat} />}
       {dropping && (
         <div class="drop-veil" aria-hidden="true">
           <p>Drop to share with the room</p>
