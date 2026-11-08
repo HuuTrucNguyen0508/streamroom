@@ -31,8 +31,10 @@ const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-d
 /** Screen readers read the whole live region; a long paste would drown out the call. */
 const ANNOUNCE_CHARS = 140;
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 function clip(text: string, max: number): string {
-  const chars = [...text];
+  const chars = Array.from(graphemes.segment(text), (s) => s.segment);
   return chars.length > max ? `${chars.slice(0, max).join("")}…` : text;
 }
 
