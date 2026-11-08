@@ -238,6 +238,12 @@ test("files: cancel stops a download, and a sender leaving fails one in progress
   await card(ben, "archive.bin").getByRole("button", { name: "Cancel" }).click();
   await expect(card(ben, "archive.bin")).toHaveAttribute("data-state", "available");
   await expect(card(ada, "archive.bin")).toContainText("Shared from this tab");
+  const activity = () => ada.page.evaluate(() => ({...(window as unknown as {__streamroom: {transfers: {activity: {reads: number; sends: number}}}}).__streamroom.transfers.activity}));
+  await ada.page.waitForTimeout(100);
+  const stopped = await activity();
+  await ada.page.waitForTimeout(400);
+  expect(await activity()).toEqual(stopped);
+
 
   await card(ben, "archive.bin").getByRole("button", { name: "Download" }).click();
   await expect.poll(() => receivedOf(ben, "archive.bin"), { intervals: [50] }).toBeGreaterThan(0);
@@ -280,6 +286,43 @@ test("files: Chromium and Firefox send each other a file", async ({ browser, bas
   } finally {
     await fox.close();
   }
+});
+
+test("chat: IME, focus return, mobile sheet, and scroll pinning at the history cap", async ({browser, baseURL}) => {
+  const ada = await open(browser, "Ada");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await openChat(ada);
+  const input = ada.page.getByTestId("chat-input");
+  await input.fill("composing");
+  await input.dispatchEvent("keydown", {key:"Enter",keyCode:229,bubbles:true});
+  await expect(input).toHaveValue("composing");
+  await expect(messages(ada)).toHaveCount(0);
+  await input.press("Escape");
+  await expect(ada.page.getByTestId("chat-panel")).toHaveCount(0);
+  await expect(ada.page.getByTestId("chat-toggle")).toBeFocused();
+  await openChat(ada);
+  await say(ada, "one\n\n\n\n\n\ttwo");
+  await expect(messages(ada)).toHaveText(["one\n\n\n\ttwo"]);
+  await expect(ada.page.locator("time")).toHaveAttribute("datetime", /T/);
+  await expect(ada.page.getByTestId("chat-log")).not.toHaveAttribute("aria-live");
+  await ada.page.evaluate(() => {
+    const call = (window as unknown as {__streamroom: {view:{selfId:string};onMessage(msg:unknown):void}}).__streamroom;
+    for (let i=0; i<505; i++) call.onMessage({t:"chat",entry:{seq:1000+i,from:call.view.selfId,name:"Ada",at:Date.now(),body:{kind:"text",text:`Message ${i}`}}});
+  });
+  await expect(messages(ada)).toHaveCount(500);
+  await expect.poll(() => ada.page.getByTestId("chat-log").evaluate(el => el.scrollHeight-el.scrollTop-el.clientHeight)).toBeLessThan(2);
+  await ada.page.evaluate(() => {
+    const call = (window as unknown as {__streamroom: {view:{selfId:string};onMessage(msg:unknown):void}}).__streamroom;
+    call.onMessage({t:"chat",entry:{seq:1505,from:call.view.selfId,name:"Ada",at:Date.now(),body:{kind:"text",text:"Last message"}}});
+  });
+  await expect(messages(ada).last()).toHaveText("Last message");
+  await expect.poll(() => ada.page.getByTestId("chat-log").evaluate(el => el.scrollHeight-el.scrollTop-el.clientHeight)).toBeLessThan(2);
+  await ada.page.setViewportSize({width:390,height:844});
+  await expect.poll(() => ada.page.locator(".dock").evaluate(el => (el as HTMLElement).inert)).toBe(true);
+  await input.press("Escape");
+  await expect.poll(() => ada.page.locator(".dock").evaluate(el => (el as HTMLElement).inert)).toBe(false);
+  await ada.context.close();
 });
 
 test("screenshots of the chat panel", async ({ browser, baseURL }, testInfo) => {

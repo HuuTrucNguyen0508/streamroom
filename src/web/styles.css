@@ -298,7 +298,7 @@ textarea {
 }
 
 .input::placeholder {
-  color: #6c6790;
+  color: var(--dust);
 }
 
 select.input {
@@ -1188,7 +1188,7 @@ select.input {
 }
 
 .chat-input::placeholder {
-  color: #6c6790;
+  color: var(--dust);
 }
 
 .chat-attach,
@@ -1338,3 +1338,9 @@ select.input {
     font-size: 1rem;
   }
 }
+
+.chat-text { overflow: hidden; overflow-wrap: anywhere; }
+.file-name { display: flex; }
+.file-stem { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-extension { flex: none; }
+@media (max-width: 900px) { .chat { height: 100dvh; } }

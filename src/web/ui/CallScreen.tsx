@@ -40,6 +40,10 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const [menu, setMenu] = useState<"share" | "mic" | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const focusChatInput = useRef(true);
+  const callRef = useRef<HTMLDivElement>(null);
+  const chatToggle = useRef<HTMLButtonElement>(null);
+  const closeChat = () => { setChatOpen(false); requestAnimationFrame(() => chatToggle.current?.focus()); };
   const [chatOpen, setChatOpen] = useState(false);
   const [dropping, setDropping] = useState(false);
   const shares = sharesOf(view);
@@ -58,6 +62,17 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   }, [shareKey]);
 
   useEffect(() => call.setChatOpen(chatOpen), [call, chatOpen]);
+  useEffect(() => {
+    const media = matchMedia("(max-width: 900px)");
+    const update = () => {
+      for (const child of callRef.current?.children ?? []) {
+        if (child instanceof HTMLElement && !child.classList.contains("chat")) child.inert = chatOpen && media.matches;
+      }
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => { media.removeEventListener("change", update); };
+  }, [chatOpen]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -96,6 +111,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
 
   return (
     <div
+      ref={callRef}
       class={`call${stage ? " has-stage" : ""}${showStats ? " has-stats" : ""}${chatOpen ? " has-chat" : ""}`}
       data-screen="call"
       data-phase={view.phase}
@@ -114,6 +130,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         const files = [...e.dataTransfer.files];
         if (files.length === 0) return;
         call.shareFiles(files);
+        focusChatInput.current = false;
         setChatOpen(true);
       }}
     >
@@ -275,11 +292,12 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
 
         <div class="dock-group">
           <button
+            ref={chatToggle}
             class="btn btn-dock chat-toggle"
             aria-pressed={chatOpen}
             aria-label={view.unread > 0 ? `Chat, ${view.unread} unread` : "Chat"}
             data-testid="chat-toggle"
-            onClick={() => setChatOpen(!chatOpen)}
+            onClick={() => { focusChatInput.current = true; if (chatOpen) closeChat(); else setChatOpen(true); }}
           >
             <ChatIcon />
             <span class="label">Chat</span>
@@ -296,7 +314,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </div>
       </footer>
 
-      {chatOpen && <ChatPanel call={call} view={view} onClose={() => setChatOpen(false)} />}
+      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} />}
       {dropping && (
         <div class="drop-veil" aria-hidden="true">
           <p>Drop to share with the room</p>

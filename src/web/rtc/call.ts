@@ -24,7 +24,7 @@ import { PeerLink } from "./peer.ts";
 import { AUDIO_MAX_BITRATE, PRESETS } from "./presets.ts";
 import { Signaling } from "./signaling.ts";
 import { StatsSampler, type MediaLabel, type PeerStats } from "./stats.ts";
-import { FileTransfers, type TransfersView } from "./transfers.ts";
+import { FileTransfers, downloadKey, type TransfersView } from "./transfers.ts";
 
 export type Phase = "idle" | "connecting" | "in-call" | "reconnecting" | "full" | "locked" | "left";
 
@@ -112,11 +112,12 @@ export class Call {
   private name = "";
   private notice: string | null = null;
   private chat: ChatEntry[] = [];
+  private pendingChat: { body: ChatBody; resolve: (ok: boolean) => void }[] = [];
   private unread = 0;
   private chatOpen = false;
   private readonly ownIds = new Set<MemberId>();
   /** Mirrors the server's chat limit so a refused message stays in the composer. */
-  private readonly chatBucket = new TokenBucket(10, 1000);
+  private readonly chatBucket = new TokenBucket(9, 1100);
   private readonly transfers = new FileTransfers({
     open: (member, label) => this.remotes.get(member)?.link?.openChannel(label) ?? null,
     maxMessageSize: (member) => this.remotes.get(member)?.link?.maxMessageSize ?? 0,
@@ -232,6 +233,7 @@ export class Call {
     switch (msg.t) {
       case "joined": {
         // A rejoin has a new member id, so nobody can request the old file cards any more.
+        for (const pending of this.pendingChat.splice(0)) pending.resolve(false);
         if (this.selfId !== null) this.transfers.unshareAll();
         this.ownIds.add(msg.you);
         this.selfId = msg.you;
@@ -246,7 +248,7 @@ export class Call {
         const history = (Array.isArray(msg.chat) ? msg.chat : []).flatMap((e) => validEntry(e) ?? []);
         const fromOthers = history.filter((e) => !this.ownIds.has(e.from)).length;
         this.unread = this.chatOpen ? 0 : this.chat.length === 0 ? fromOthers : Math.min(this.unread, fromOthers);
-        this.chat = history;
+        this.chat = this.keepDownloads(history);
         this.phase = "in-call";
         this.emit();
         return;
@@ -278,7 +280,8 @@ export class Call {
       case "chat": {
         const entry = validEntry(msg.entry);
         if (!entry) return;
-        this.chat = [...this.chat, entry].slice(-MAX_CHAT_ENTRIES);
+        this.chat = this.keepDownloads([...this.chat, entry]);
+        if (entry.from === this.selfId) this.pendingChat.shift()?.resolve(true);
         if (!this.chatOpen && !this.ownIds.has(entry.from)) this.unread++;
         this.emit();
         return;
@@ -288,6 +291,9 @@ export class Call {
           this.sig.close();
           this.setPhase(msg.code);
         } else if (msg.code === "slow_down") {
+          const rejected = this.pendingChat.shift();
+          if (rejected?.body.kind === "file") this.transfers.unshare(rejected.body.file.id);
+          rejected?.resolve(false);
           this.notice = "You're sending messages too fast. Wait a moment and try again.";
           this.emit();
         } else {
@@ -518,17 +524,29 @@ export class Call {
   }
 
   /** False when the message wasn't sent; the composer keeps it. */
-  sendChat(text: string): boolean {
+  sendChat(text: string): Promise<boolean> {
     const body = parseChatBody({ kind: "text", text });
-    return body !== null && this.sendChatBody(body);
+    if (!body) {
+      this.notice = "Write a message with visible text before sending.";
+      this.emit();
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      if (!this.sendChatBody(body, resolve)) resolve(false);
+    });
   }
 
-  private sendChatBody(body: ChatBody): boolean {
+  private keepDownloads(history: ChatEntry[]): ChatEntry[] {
+    return retainDownloadCards(this.chat, history, this.transfers.view());
+  }
+
+  private sendChatBody(body: ChatBody, resolve: (ok: boolean) => void = () => {}): boolean {
     if (this.phase !== "in-call" || !this.sig.open) {
       this.notice = "You're not connected to the room right now. Try again in a moment.";
     } else if (!this.chatBucket.take()) {
       this.notice = "You're sending messages too fast. Wait a moment and try again.";
     } else {
+      this.pendingChat.push({ body, resolve });
       this.sig.send({ t: "chat", body });
       return true;
     }
@@ -550,7 +568,7 @@ export class Call {
       this.transfers.offer(meta, file);
       if (!this.sendChatBody({ kind: "file", file: meta })) {
         this.transfers.unshare(meta.id);
-        return;
+        refused.push(`${file.name} was not shared. ${this.notice ?? "Try again."}`);
       }
     }
     if (refused.length > 0) {
@@ -692,4 +710,11 @@ function validEntry(raw: unknown): ChatEntry | null {
   const name = cleanName(e.name);
   if (!body || name === null || !isMemberId(e.from) || typeof e.seq !== "number" || typeof e.at !== "number") return null;
   return { seq: e.seq, from: e.from, name, at: e.at, body };
+}
+
+export function retainDownloadCards(previous: ChatEntry[], history: ChatEntry[], transfers: TransfersView): ChatEntry[] {
+  const keep = (e: ChatEntry) => e.body.kind === "file" && transfers.incoming.has(downloadKey(e.from, e.body.file.id));
+  const keys = new Set(history.map((e) => `${e.from}/${e.seq}`));
+  const saved = previous.filter((e) => keep(e) && !keys.has(`${e.from}/${e.seq}`));
+  return [...saved, ...history.slice(0, -MAX_CHAT_ENTRIES).filter(keep), ...history.slice(-MAX_CHAT_ENTRIES)];
 }

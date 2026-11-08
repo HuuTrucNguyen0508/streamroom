@@ -28,23 +28,62 @@ function groupsOf(chat: ChatEntry[]): Group[] {
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
-export function ChatPanel({ call, view, onClose }: { call: Call; view: CallView; onClose: () => void }) {
+export function ChatPanel({ call, view, onClose, focusInput }: { call: Call; view: CallView; onClose: () => void; focusInput: boolean }) {
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pinned = useRef(true);
   const groups = groupsOf(view.chat);
+  const last = view.chat.at(-1);
+  const announcement = last ? `${last.name}: ${last.body.kind === "text" ? last.body.text : "shared a file"}` : "";
 
   useEffect(() => {
-    inputRef.current?.focus();
+    if (focusInput && !matchMedia("(pointer: coarse)").matches) inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const update = () => {
+      const panel = panelRef.current;
+      if (!panel) return;
+      if (matchMedia("(max-width: 900px)").matches && viewport) {
+        panel.style.height = `${viewport.height}px`;
+        panel.style.top = `${viewport.offsetTop}px`;
+      } else { panel.style.height = ""; panel.style.top = ""; }
+    };
+    update();
+    viewport?.addEventListener("resize", update);
+    viewport?.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    return () => {
+      viewport?.removeEventListener("resize", update);
+      viewport?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
   }, []);
 
   // Follow new messages unless the reader has scrolled up to read older ones.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (list && pinned.current) list.scrollTop = list.scrollHeight;
-  }, [view.chat.length]);
+  }, [view.chat.at(-1)?.seq, view.chat.at(-1)?.from]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const observer = new ResizeObserver(() => { if (pinned.current) list.scrollTop = list.scrollHeight; });
+    for (const child of list.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [view.chat]);
+
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
 
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -53,13 +92,18 @@ export function ChatPanel({ call, view, onClose }: { call: Call; view: CallView;
     input.style.height = `${input.scrollHeight}px`;
   }, [draft]);
 
-  const send = () => {
-    if (draft.trim() === "") return;
-    if (call.sendChat(draft)) setDraft("");
+  const send = async () => {
+    if (sending) return;
+    const text = draft;
+    setSending(true);
+    const sent = await call.sendChat(text);
+    if (sent) setDraft((current) => current === text ? "" : current);
+    setSending(false);
   };
 
   return (
-    <aside class="chat" aria-label="Chat" data-testid="chat-panel">
+    <aside ref={panelRef} class="chat" aria-label="Chat" data-testid="chat-panel">
+      <p class="sr-only" role="status" aria-live="polite">{announcement}</p>
       <header class="chat-head">
         <h2 class="chat-title">Chat</h2>
         <button class="btn btn-ghost btn-sm" aria-label="Close chat" onClick={onClose}>
@@ -71,8 +115,7 @@ export function ChatPanel({ call, view, onClose }: { call: Call; view: CallView;
         class="chat-log"
         data-testid="chat-log"
         ref={listRef}
-        role="log"
-        aria-live="polite"
+
         onScroll={(e) => {
           const el = e.currentTarget;
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
@@ -89,7 +132,7 @@ export function ChatPanel({ call, view, onClose }: { call: Call; view: CallView;
               </div>
               <div class="chat-runs">
                 <p class="chat-who">
-                  <span class="chat-name">{own ? "You" : g.name}</span> <time class="chat-time">{clock.format(g.at)}</time>
+                  <span class="chat-name">{own ? "You" : g.name}</span> <time class="chat-time" dateTime={new Date(g.at).toISOString()}>{clock.format(g.at)}</time>
                 </p>
                 {g.entries.map((e) =>
                   e.body.kind === "text" ? (
@@ -140,14 +183,14 @@ export function ChatPanel({ call, view, onClose }: { call: Call; view: CallView;
             value={draft}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
                 e.preventDefault();
                 send();
               }
             }}
           />
         </label>
-        <button class="btn btn-primary chat-send" aria-label="Send" disabled={draft.trim() === ""} data-testid="chat-send">
+        <button class="btn btn-primary chat-send" aria-label="Send" disabled={sending || draft.trim() === ""} data-testid="chat-send">
           <SendIcon />
         </button>
       </form>
@@ -178,6 +221,9 @@ function cardState(view: CallView, entry: ChatEntry, file: FileMeta, own: boolea
 function FileCard({ call, view, entry, file, own }: { call: Call; view: CallView; entry: ChatEntry; file: FileMeta; own: boolean }) {
   const state = cardState(view, entry, file, own);
   const sender = entry.name;
+  const dot = file.name.lastIndexOf(".");
+  const extension = dot > 0 ? file.name.slice(dot) : "";
+  const stem = extension ? file.name.slice(0, dot) : file.name;
   const progress = state.kind === "incoming" && "received" in state ? state.received / file.size : state.kind === "incoming" && state.phase === "done" ? 1 : 0;
   const stateName = state.kind === "incoming" ? state.phase : state.kind;
   const present = view.members.some((m) => m.id === entry.from);
@@ -284,9 +330,10 @@ function FileCard({ call, view, entry, file, own }: { call: Call; view: CallView
       data-name={file.name}
       data-received={state.kind === "incoming" && "received" in state ? state.received : undefined}
     >
+      <span class="sr-only" role="status">{state.kind === "incoming" && state.phase === "done" ? `${file.name} is ready to save` : state.kind === "incoming" && state.phase === "failed" ? `${file.name} failed` : ""}</span>
       <div class="file-main">
         <p class="file-name" title={file.name}>
-          {file.name}
+          <span class="file-stem">{stem}</span><span class="file-extension">{extension}</span>
         </p>
         <p class="file-meta">
           <span class="file-num">{bytes(file.size)}</span>
