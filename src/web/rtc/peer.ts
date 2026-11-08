@@ -16,6 +16,8 @@ export interface SendOptions {
 export interface PeerEvents {
   signal(data: SignalData): void;
   track(track: MediaStreamTrack, streams: readonly MediaStream[]): void;
+  /** A data channel this side created at startup ("ctl") or the remote side opened. */
+  channel(channel: RTCDataChannel): void;
   change(): void;
 }
 
@@ -85,6 +87,25 @@ export class PeerLink {
       }
       this.events.change();
     };
+    pc.ondatachannel = ({ channel }) => this.events.channel(channel);
+    // Only the impolite side creates the control channel, so it makes the first offer even when
+    // neither side has media, and the polite side keeps waiting for that offer.
+    if (!polite) this.events.channel(pc.createDataChannel("ctl", { ordered: true }));
+  }
+
+  /** A new reliable channel on the existing connection. No renegotiation once the first one exists. */
+  openChannel(label: string): RTCDataChannel | null {
+    if (this.closed) return null;
+    try {
+      return this.pc.createDataChannel(label, { ordered: true });
+    } catch {
+      return null;
+    }
+  }
+
+  /** Largest message the remote end accepts, or 0 when unknown. */
+  get maxMessageSize(): number {
+    return this.pc.sctp?.maxMessageSize ?? 0;
   }
 
   private firstRemoteDone: () => void = () => undefined;
@@ -220,6 +241,7 @@ export class PeerLink {
     this.pc.onicecandidateerror = null;
     this.pc.onconnectionstatechange = null;
     this.pc.onsignalingstatechange = null;
+    this.pc.ondatachannel = null;
     this.pc.close();
   }
 }
