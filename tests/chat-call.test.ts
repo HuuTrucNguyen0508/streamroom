@@ -94,3 +94,15 @@ it.each([true, false])("reconciles a dropped send against rejoin history, accept
   signal.events!.message({t:"joined",you:"sender0002" as MemberId,resume:"token",chat:accepted ? [{seq:1,from:member,name:"Sender",at:1,body:{kind:"text",text:"during drop"}}] : [],room:{hostId:member,locked:false,members:[]}});
   expect(await sent).toBe(accepted);
 });
+it("confirms the first message in a rebuilt room even when a kept file card has a higher seq", async () => {
+  const call = setup();
+  const card: ChatEntry = {seq:5,from:"friend0001" as MemberId,name:"Friend",at:1,body:{kind:"file",file:meta}};
+  signal.events!.message({t:"chat",entry:card});
+  call.download(card);
+  // The room emptied and was created again, so its seqs start over.
+  signal.events!.message({t:"joined",you:"sender0002" as MemberId,resume:"token",chat:[],room:{hostId:"sender0002" as MemberId,locked:false,members:[]}});
+  expect(call.view.chat).toEqual([card]);
+  const sent = call.sendChat("hi");
+  signal.events!.message({t:"chat",entry:{seq:1,from:"sender0002" as MemberId,name:"Sender",at:2,body:{kind:"text",text:"hi"}}});
+  expect(await Promise.race([sent, new Promise((r) => setTimeout(() => r("pending"), 20))])).toBe(true);
+});
