@@ -47,9 +47,11 @@ async function openChat(f: Friend): Promise<void> {
 
 async function say(f: Friend, text: string): Promise<void> {
   await openChat(f);
+  const before = await f.page.getByTestId("chat-message").count();
   await f.page.getByTestId("chat-input").fill(text);
   await f.page.getByTestId("chat-input").press("Enter");
   await expect(f.page.getByTestId("chat-input")).toHaveValue("");
+  await expect(f.page.getByTestId("chat-message")).toHaveCount(before + 1);
 }
 
 const messages = (f: Friend) => f.page.getByTestId("chat-message");
@@ -323,6 +325,182 @@ test("chat: IME, focus return, mobile sheet, and scroll pinning at the history c
   await input.press("Escape");
   await expect.poll(() => ada.page.locator(".dock").evaluate(el => (el as HTMLElement).inert)).toBe(false);
   await ada.context.close();
+});
+
+type Hook = { __streamroom: { sig: { ws: WebSocket }; onMessage(msg: unknown): void }; __held: string[]; __release(): void };
+
+/** Holds this tab's outgoing chat frames until released, so a send stays in flight. */
+async function holdChat(f: Friend): Promise<void> {
+  await f.page.evaluate(() => {
+    const w = window as unknown as Hook;
+    const ws = w.__streamroom.sig.ws;
+    const real = ws.send.bind(ws);
+    w.__held = [];
+    ws.send = (data: string) => { if (JSON.parse(data).t === "chat") w.__held.push(data); else real(data); };
+    w.__release = () => { ws.send = real; for (const data of w.__held.splice(0)) real(data); };
+  });
+}
+
+const liveRegion = (f: Friend) => f.page.locator('[data-testid="chat-panel"] > p[aria-live="polite"]');
+
+test("chat: Escape closes an open menu first, waits out IME composition, and the draft survives closing", async ({ browser, baseURL }) => {
+  const ada = await open(browser, "Ada");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await openChat(ada);
+  const panel = ada.page.getByTestId("chat-panel");
+  const input = ada.page.getByTestId("chat-input");
+  await expect(panel).not.toHaveAttribute("role", "dialog");
+  await expect.poll(() => ada.page.locator(".dock").evaluate((el) => (el as HTMLElement).inert)).toBe(false);
+  await input.fill("half a thought");
+
+  await ada.page.getByTestId("share").click();
+  await expect(ada.page.getByRole("menu", { name: "Share quality" })).toBeVisible();
+  await ada.page.keyboard.press("Escape");
+  await expect(ada.page.getByRole("menu")).toHaveCount(0);
+  await expect(panel).toBeVisible();
+
+  await input.focus();
+  await input.dispatchEvent("keydown", { key: "Escape", isComposing: true, bubbles: true });
+  await input.dispatchEvent("keydown", { key: "Escape", keyCode: 229, bubbles: true });
+  await ada.page.evaluate(() => window.addEventListener("keydown", (e) => e.preventDefault(), { capture: true, once: true }));
+  await input.press("Escape");
+  await expect(panel).toBeVisible();
+
+  await input.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(ada.page.getByTestId("chat-toggle")).toBeFocused();
+  await openChat(ada);
+  await expect(input).toHaveValue("half a thought");
+  await ada.context.close();
+});
+
+test("chat: text typed during an in-flight send stays, and a rejected send comes back ahead of it once", async ({ browser, baseURL }) => {
+  const ada = await open(browser, "Ada");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await openChat(ada);
+  const input = ada.page.getByTestId("chat-input");
+
+  await holdChat(ada);
+  await input.fill("first");
+  await input.press("Enter");
+  await expect(input).toHaveValue("");
+  await input.pressSequentially("next idea");
+  await input.press("Escape");
+  await openChat(ada);
+  await expect(input).toHaveValue("next idea");
+  await ada.page.evaluate(() => (window as unknown as Hook).__release());
+  await expect(messages(ada)).toHaveText(["first"]);
+  await expect(input).toHaveValue("next idea");
+
+  await holdChat(ada);
+  await input.fill("rejected one");
+  await input.press("Enter");
+  await expect(input).toHaveValue("");
+  await input.pressSequentially("later");
+  await input.press("Enter");
+  await expect(input).toHaveValue("later");
+  await ada.page.evaluate(() => (window as unknown as Hook).__streamroom.onMessage({ t: "error", code: "slow_down", message: "" }));
+  await expect(input).toHaveValue("rejected one\nlater");
+  expect(await ada.page.evaluate(() => (window as unknown as Hook).__held.length)).toBe(1);
+  await ada.page.waitForTimeout(300);
+  await expect(messages(ada)).toHaveText(["first"]);
+  await ada.context.close();
+});
+
+test("chat: on a phone the sheet is a modal dialog, keeps late call children inert, and ignores pinch zoom", async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const ada: Friend = { context, page: await context.newPage(), name: "Ada" };
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  expect(await ada.page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+  await ada.page.getByTestId("chat-toggle").click();
+  const dialog = ada.page.getByRole("dialog", { name: "Chat" });
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect(ada.page.getByRole("button", { name: "Close chat" })).toBeFocused();
+
+  const inert = (selector: string) => ada.page.locator(selector).evaluate((el) => (el as HTMLElement).inert);
+  await expect.poll(() => inert(".dock")).toBe(true);
+  await ada.page.evaluate(() => {
+    const late = document.createElement("div");
+    late.id = "late-child";
+    document.querySelector('[data-screen="call"]')!.append(late);
+  });
+  await expect.poll(() => inert("#late-child")).toBe(true);
+  expect(await inert('[data-testid="chat-panel"]')).toBe(false);
+
+  const height = () => dialog.evaluate((el) => (el as HTMLElement).style.height);
+  const before = await height();
+  await ada.page.evaluate(() => {
+    const vv = window.visualViewport!;
+    Object.defineProperty(vv, "scale", { configurable: true, get: () => 2 });
+    Object.defineProperty(vv, "height", { configurable: true, get: () => 300 });
+    vv.dispatchEvent(new Event("resize"));
+  });
+  expect(await height()).toBe(before);
+  await ada.page.evaluate(() => {
+    const vv = window.visualViewport!;
+    Object.defineProperty(vv, "scale", { configurable: true, get: () => 1 });
+    vv.dispatchEvent(new Event("resize"));
+  });
+  expect(await height()).toBe("300px");
+
+  await ada.page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => inert(".dock")).toBe(false);
+  await expect.poll(() => inert("#late-child")).toBe(false);
+  await context.close();
+});
+
+test("chat: screen readers hear other people's messages, capped, including repeats", async ({ browser, baseURL }) => {
+  const ada = await open(browser, "Ada");
+  const ben = await open(browser, "Ben");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await join(ben, room);
+  await openChat(ben);
+  await ben.page.evaluate(() => {
+    const log: string[] = [];
+    (window as unknown as { __heard: string[] }).__heard = log;
+    const region = document.querySelector('[data-testid="chat-panel"] > p[aria-live="polite"]')!;
+    new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) if (n instanceof HTMLElement) log.push(n.textContent ?? "");
+    }).observe(region, { childList: true, subtree: true, characterData: true });
+  });
+
+  await say(ada, "Popcorn is ready");
+  await expect(liveRegion(ben)).toHaveText("Ada: Popcorn is ready");
+  await say(ben, "On my way");
+  await expect(messages(ben).last()).toHaveText("On my way");
+  await expect(liveRegion(ben)).toHaveText("");
+
+  const long = `${"a".repeat(139)}👨‍👩‍👧 and then a very long tail nobody needs read aloud`;
+  await say(ada, long);
+  await expect(liveRegion(ben)).toHaveText(`Ada: ${"a".repeat(139)}👨‍👩‍👧…`);
+
+  await say(ada, "Same");
+  await expect(messages(ben).last()).toHaveText("Same");
+  await say(ada, "Same");
+  await expect(messages(ben)).toHaveCount(5);
+  await expect.poll(() => ben.page.evaluate(() => (window as unknown as { __heard: string[] }).__heard.filter((t) => t === "Ada: Same").length)).toBe(2);
+
+  for (const f of [ada, ben]) await f.context.close();
+});
+
+test("chat: joined emoji, variation selectors and a Persian ZWNJ arrive byte-identical", async ({ browser, baseURL }) => {
+  const ada = await open(browser, "Ada");
+  const ben = await open(browser, "Ben");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await join(ben, room);
+  const text = "\u{1F468}‍\u{1F469}‍\u{1F467} ❤️ می‌خواهم";
+  await say(ada, text);
+  await openChat(ben);
+  await expect(messages(ben)).toHaveCount(1);
+  const received = await messages(ben).first().evaluate((el) => el.textContent ?? "");
+  expect(Buffer.from(received, "utf8").toString("hex")).toBe(Buffer.from(text, "utf8").toString("hex"));
+  for (const f of [ada, ben]) await f.context.close();
 });
 
 test("screenshots of the chat panel", async ({ browser, baseURL }, testInfo) => {
