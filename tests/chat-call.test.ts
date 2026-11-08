@@ -12,7 +12,7 @@ vi.mock("../src/web/rtc/audio.ts", () => ({ AudioEngine: class {} }));
 const member = "sender0001" as MemberId;
 const meta: FileMeta = { id: "AAAAAAAAAAAAAAAA" as FileId, name:"f.bin",size:64,mime:"" };
 beforeEach(() => { vi.stubGlobal("location", {protocol:"http:",host:"localhost"}); signal.sent = []; });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 function setup() {
   const call = new Call("AAAAAAAAAAAAAAAAAAAAAA" as RoomId, {relayOnly:false});
   signal.events!.message({t:"joined",you:member,resume:"token",chat:[],room:{hostId:member,locked:false,members:[]}});
@@ -51,4 +51,37 @@ it("keeps retained download cards across history replacement and the 500-entry c
   expect(retainDownloadCards(history, history, view)[0]).toEqual(card);
   view.incoming.clear();
   expect(retainDownloadCards(history, history, view)).toHaveLength(500);
+});
+
+it.each(["bad_request", "not_joined"] as const)("settles %s before accepting the next echo", async (code) => {
+  const call = setup();
+  const refused = call.sendChat("first");
+  signal.events!.message({t:"error",code,message:"refused"});
+  const result = vi.fn();
+  void refused.then(result);
+  await Promise.resolve();
+  expect(result).toHaveBeenCalledWith(false);
+  const next = call.sendChat("next");
+  signal.events!.message({t:"chat",entry:{seq:1,from:member,name:"Sender",at:1,body:{kind:"text",text:"first"}}});
+  const nextResult = vi.fn();
+  void next.then(nextResult);
+  await Promise.resolve();
+  expect(nextResult).not.toHaveBeenCalled();
+  signal.events!.message({t:"chat",entry:{seq:2,from:member,name:"Sender",at:1,body:{kind:"text",text:"next"}}});
+  expect(await next).toBe(true);
+});
+it("bounds a missing echo without inviting an automatic resend", async () => {
+  vi.useFakeTimers();
+  const call = setup();
+  const sent = call.sendChat("uncertain");
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(await sent).toBe(true);
+  expect(call.view.notice).toContain("history");
+});
+it.each([true, false])("reconciles a dropped send against rejoin history, accepted=%s", async (accepted) => {
+  const call = setup();
+  const sent = call.sendChat("during drop");
+  signal.events!.drop();
+  signal.events!.message({t:"joined",you:"sender0002" as MemberId,resume:"token",chat:accepted ? [{seq:1,from:member,name:"Sender",at:1,body:{kind:"text",text:"during drop"}}] : [],room:{hostId:member,locked:false,members:[]}});
+  expect(await sent).toBe(accepted);
 });

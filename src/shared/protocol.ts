@@ -161,7 +161,7 @@ export function cleanName(raw: unknown): string | null {
   return Array.from(name).slice(0, MAX_NAME_LENGTH).join("");
 }
 
-const INVISIBLE_CHARS = /[\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u2800\u3164\uffa0\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
+const INVISIBLE_CHARS = /[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b\u200e\u200f\u2028-\u202e\u2060-\u206f\u2800\u3164\ufeff\uffa0]/gu;
 const UNSAFE_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** Keeps newlines, strips other control and bidi-override characters, trims. Null when empty or too long. */

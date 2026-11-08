@@ -5,6 +5,7 @@ import {
   MAX_FILE_NAME,
   MAX_MESSAGE_BYTES,
   cleanFileName,
+  cleanChatText,
   cleanName,
   isRoomId,
   newRoomId,
@@ -120,3 +121,13 @@ describe("chat messages", () => {
    expect(parseClientMessage(JSON.stringify({t:"chat", body:{kind:"file",file:{id:"AAAAAAAAAAAAAAAA",name:`photo${hidden}.exe`,size:1,mime:""}}}))).toMatchObject({body:{file:{name:"photo.exe"}}});
    expect(parseClientMessage(JSON.stringify({t:"chat",body:{kind:"text",text:`one${hidden}\n\n\n\n\n\ttwo`}}))).toMatchObject({body:{text:"one\n\n\n\ttwo"}});
  });
+
+
+it("preserves emoji sequences and Persian joining characters", () => {
+  for (const text of ["👨‍👩‍👧", "❤️", "1️⃣", "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}", "می‌خواهم"]) {
+    expect(cleanChatText(text)).toBe(text);
+    expect(cleanName(text)).toBe(text);
+    expect(cleanFileName(text + ".txt")).toBe(text + ".txt");
+  }
+  expect(cleanFileName("invoice.pdf" + "⠀".repeat(200) + ".exe")).toBe("invoice.pdf.exe");
+});

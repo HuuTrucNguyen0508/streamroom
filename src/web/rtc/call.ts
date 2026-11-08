@@ -112,7 +112,7 @@ export class Call {
   private name = "";
   private notice: string | null = null;
   private chat: ChatEntry[] = [];
-  private pendingChat: { body: ChatBody; resolve: (ok: boolean) => void }[] = [];
+  private pendingChat: { body: ChatBody; sender: MemberId | null; afterSeq: number; timer: ReturnType<typeof setTimeout>; resolve: (ok: boolean) => void }[] = [];
   private unread = 0;
   private chatOpen = false;
   private readonly ownIds = new Set<MemberId>();
@@ -210,6 +210,7 @@ export class Call {
 
   leave(): void {
     this.sig.close();
+    for (const pending of [...this.pendingChat]) this.settleChat(pending, true);
     for (const id of [...this.remotes.keys()]) this.dropRemote(id);
     this.transfers.close();
     this.stopShare();
@@ -233,7 +234,6 @@ export class Call {
     switch (msg.t) {
       case "joined": {
         // A rejoin has a new member id, so nobody can request the old file cards any more.
-        for (const pending of this.pendingChat.splice(0)) pending.resolve(false);
         if (this.selfId !== null) this.transfers.unshareAll();
         this.ownIds.add(msg.you);
         this.selfId = msg.you;
@@ -246,6 +246,12 @@ export class Call {
         for (const m of msg.room.members) if (m.id !== msg.you) this.addRemote(m);
         this.transfers.keepSenders(new Set(this.remotes.keys()));
         const history = (Array.isArray(msg.chat) ? msg.chat : []).flatMap((e) => validEntry(e) ?? []);
+        const unmatched = [...history];
+        for (const pending of [...this.pendingChat]) {
+          const index = unmatched.findIndex((entry) => entry.from === pending.sender && entry.seq > pending.afterSeq && JSON.stringify(entry.body) === JSON.stringify(pending.body));
+          this.settleChat(pending, index !== -1);
+          if (index !== -1) unmatched.splice(index, 1);
+        }
         const fromOthers = history.filter((e) => !this.ownIds.has(e.from)).length;
         this.unread = this.chatOpen ? 0 : this.chat.length === 0 ? fromOthers : Math.min(this.unread, fromOthers);
         this.chat = this.keepDownloads(history);
@@ -281,25 +287,29 @@ export class Call {
         const entry = validEntry(msg.entry);
         if (!entry) return;
         this.chat = this.keepDownloads([...this.chat, entry]);
-        if (entry.from === this.selfId) this.pendingChat.shift()?.resolve(true);
+        if (entry.from === this.selfId) {
+          const pending = this.pendingChat.find((p) => p.sender === entry.from && entry.seq > p.afterSeq && JSON.stringify(p.body) === JSON.stringify(entry.body));
+          if (pending) this.settleChat(pending, true);
+        }
         if (!this.chatOpen && !this.ownIds.has(entry.from)) this.unread++;
         this.emit();
         return;
       }
-      case "error":
+      case "error": {
+        const rejected = this.pendingChat[0];
+        if (rejected) this.settleChat(rejected, false);
         if (msg.code === "full" || msg.code === "locked") {
           this.sig.close();
           this.setPhase(msg.code);
         } else if (msg.code === "slow_down") {
-          const rejected = this.pendingChat.shift();
-          if (rejected?.body.kind === "file") this.transfers.unshare(rejected.body.file.id);
-          rejected?.resolve(false);
           this.notice = "You're sending messages too fast. Wait a moment and try again.";
           this.emit();
         } else {
-          console.warn("server error", msg.code, msg.message);
+          this.notice = msg.message;
+          this.emit();
         }
         return;
+      }
       case "pong":
         return;
     }
@@ -540,13 +550,29 @@ export class Call {
     return retainDownloadCards(this.chat, history, this.transfers.view());
   }
 
+  private settleChat(pending: (typeof this.pendingChat)[number], accepted: boolean): void {
+    clearTimeout(pending.timer);
+    this.pendingChat.splice(this.pendingChat.indexOf(pending), 1);
+    if (!accepted && pending.body.kind === "file") this.transfers.unshare(pending.body.file.id);
+    pending.resolve(accepted);
+  }
+
   private sendChatBody(body: ChatBody, resolve: (ok: boolean) => void = () => {}): boolean {
     if (this.phase !== "in-call" || !this.sig.open) {
       this.notice = "You're not connected to the room right now. Try again in a moment.";
     } else if (!this.chatBucket.take()) {
       this.notice = "You're sending messages too fast. Wait a moment and try again.";
     } else {
-      this.pendingChat.push({ body, resolve });
+      const pending = {
+        body, sender: this.selfId, afterSeq: this.chat.at(-1)?.seq ?? 0, resolve,
+        timer: setTimeout(() => {
+          // Delivery is unknown. Restoring the draft here could send it twice.
+          this.settleChat(pending, true);
+          this.notice = "Could not confirm delivery. Check the chat history before sending again.";
+          this.emit();
+        }, 30_000),
+      };
+      this.pendingChat.push(pending);
       this.sig.send({ t: "chat", body });
       return true;
     }
