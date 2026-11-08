@@ -41,6 +41,7 @@ export class SignalingSession {
       case "signal": return this.rooms.signal(this.conn, msg.to, msg.data);
       case "state": return this.rooms.updateState(this.conn, msg.state);
       case "lock": return this.rooms.setLocked(this.conn, msg.locked);
+      case "chat": return this.rooms.chat(this.conn, msg.body);
       case "ping": return [{ kind: "send", to: this.conn, msg: { t: "pong" } }];
     }
   }
