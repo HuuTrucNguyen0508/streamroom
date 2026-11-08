@@ -20,14 +20,25 @@ export const PING_INTERVAL_MS = 20_000;
  */
 export const SILENT_DROP_MS = 50_000;
 export const MAX_NAME_LENGTH = 32;
+/** Chat text limit in UTF-16 units, after cleaning. Longer messages are refused, not truncated. */
+export const MAX_CHAT_TEXT = 2000;
+/** The room keeps at most this many chat entries and this many serialized bytes, dropping the oldest. */
+export const CHAT_HISTORY = 100;
+export const CHAT_HISTORY_BYTES = 256 * 1024;
+/** Receivers hold a whole file in memory until it is saved, so files are capped per file. */
+export const MAX_FILE_BYTES = 1024 ** 3;
+export const MAX_FILE_NAME = 255;
 
 /** Room IDs are 16 random bytes (128 bits) encoded as unpadded base64url: 22 chars. */
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{22}$/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const MEMBER_ID_RE = /^[A-Za-z0-9_-]{8,32}$/;
+const FILE_ID_RE = /^[A-Za-z0-9_-]{16}$/;
+const MIME_RE = /^[\w.+-]+\/[\w.+-]+$/;
 
 export type RoomId = string & { readonly __brand: "RoomId" };
 export type MemberId = string & { readonly __brand: "MemberId" };
+export type FileId = string & { readonly __brand: "FileId" };
 
 export function isRoomId(value: unknown): value is RoomId {
   return typeof value === "string" && ROOM_ID_RE.test(value);
@@ -35,6 +46,10 @@ export function isRoomId(value: unknown): value is RoomId {
 
 export function isMemberId(value: unknown): value is MemberId {
   return typeof value === "string" && MEMBER_ID_RE.test(value);
+}
+
+export function isFileId(value: unknown): value is FileId {
+  return typeof value === "string" && FILE_ID_RE.test(value);
 }
 
 export function randomId(bytes: number): string {
@@ -78,24 +93,46 @@ export interface SignalData {
   candidate?: { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null; usernameFragment?: string | null } | null;
 }
 
+/** A file offered in the chat. The bytes travel peer-to-peer from the sender; the server only sees this. */
+export interface FileMeta {
+  id: FileId;
+  name: string;
+  size: number;
+  mime: string;
+}
+
+export type ChatBody = { kind: "text"; text: string } | { kind: "file"; file: FileMeta };
+
+export interface ChatEntry {
+  /** Order within one room lifetime; restarts when the room empties. */
+  seq: number;
+  from: MemberId;
+  /** The sender's name when they sent it, so entries outlive their sender. */
+  name: string;
+  at: number;
+  body: ChatBody;
+}
+
 export type ClientMessage =
   | { t: "join"; room: RoomId; name: string; resume: string | null; state: MemberState }
   | { t: "signal"; to: MemberId; data: SignalData }
   | { t: "state"; state: MemberState }
   | { t: "lock"; locked: boolean }
+  | { t: "chat"; body: ChatBody }
   | { t: "ping" };
 
 export type JoinError = "full" | "locked";
-export type ErrorCode = JoinError | "bad_request" | "not_joined" | "not_host";
+export type ErrorCode = JoinError | "bad_request" | "not_joined" | "not_host" | "slow_down";
 
 export type ServerMessage =
-  | { t: "joined"; you: MemberId; resume: string; room: RoomInfo }
+  | { t: "joined"; you: MemberId; resume: string; room: RoomInfo; chat: ChatEntry[] }
   | { t: "error"; code: ErrorCode; message: string }
   | { t: "member-joined"; member: MemberInfo }
   | { t: "member-left"; id: MemberId }
   | { t: "member-state"; id: MemberId; state: MemberState }
   | { t: "room"; hostId: MemberId | null; locked: boolean }
   | { t: "signal"; from: MemberId; data: SignalData }
+  | { t: "chat"; entry: ChatEntry }
   | { t: "pong" };
 
 export interface RoomPeek {
@@ -115,13 +152,55 @@ function isObject(v: unknown): v is Json {
 
 export function cleanName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  // Strip control and bidi-override characters, collapse whitespace.
   const name = raw
-    .replace(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/g, "")
+    .replace(INVISIBLE_CHARS, "")
+    .replace(/[\p{Cc}]/gu, "")
     .replace(/\s+/g, " ")
     .trim();
   if (name.length === 0) return null;
   return Array.from(name).slice(0, MAX_NAME_LENGTH).join("");
+}
+
+const INVISIBLE_CHARS = /[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b\u200e\u200f\u2028-\u202e\u2060-\u206f\u2800\u3164\ufeff\uffa0]/gu;
+const UNSAFE_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** Keeps newlines, strips other control and bidi-override characters, trims. Null when empty or too long. */
+export function cleanChatText(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > MAX_CHAT_TEXT * 2) return null;
+  const text = raw.replace(/\r\n?/g, "\n").replace(UNSAFE_CHARS, "").replace(INVISIBLE_CHARS, "").replace(/\n(?:[ \t]*\n){3,}/g, "\n\n\n").trim();
+  return text.length === 0 || text.length > MAX_CHAT_TEXT ? null : text;
+}
+
+/** A name that is safe to show and to save under: no control, bidi or path characters. */
+export function cleanFileName(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > MAX_FILE_NAME * 4) return null;
+  const name = raw.replace(UNSAFE_CHARS, "").replace(INVISIBLE_CHARS, "").replace(/[\t\n/\\]/g, "_").trim();
+  if (name.length === 0 || name === "." || name === "..") return null;
+  return Array.from(name).slice(0, MAX_FILE_NAME).join("");
+}
+
+/** Parses file metadata from a chat message. The client runs it again on receipt. */
+export function parseFileMeta(v: unknown): FileMeta | null {
+  if (!isObject(v)) return null;
+  const name = cleanFileName(v.name);
+  const { id, size, mime } = v;
+  if (!isFileId(id) || name === null) return null;
+  if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_BYTES) return null;
+  if (typeof mime !== "string" || mime.length > 127 || (mime !== "" && !MIME_RE.test(mime))) return null;
+  return { id, name, size, mime };
+}
+
+export function parseChatBody(v: unknown): ChatBody | null {
+  if (!isObject(v)) return null;
+  if (v.kind === "text") {
+    const text = cleanChatText(v.text);
+    return text === null ? null : { kind: "text", text };
+  }
+  if (v.kind === "file") {
+    const file = parseFileMeta(v.file);
+    return file === null ? null : { kind: "file", file };
+  }
+  return null;
 }
 
 function parseState(v: unknown): MemberState | null {
@@ -197,6 +276,10 @@ export function parseClientMessage(raw: string): ClientMessage | null {
     }
     case "lock":
       return typeof v.locked === "boolean" ? { t: "lock", locked: v.locked } : null;
+    case "chat": {
+      const body = parseChatBody(v.body);
+      return body === null ? null : { t: "chat", body };
+    }
     case "ping":
       return { t: "ping" };
     default:

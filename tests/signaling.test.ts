@@ -66,3 +66,15 @@ describe("shared Durable Object / Bun message handling", () => {
     expect(a.receive(JSON.stringify({ t: "signal", to: outsider, data: { candidate: null } }))).toEqual([]);
   });
 });
+
+describe("chat dispatch", () => {
+  it("relays a valid chat message to the room and refuses a malformed one", () => {
+    const { a, b } = setup();
+    a.receive(join()); b.receive(join());
+    expect(a.receive(JSON.stringify({ t: "chat", body: { kind: "text", text: "hi" } }))).toMatchObject([
+      { kind: "send", to: "a", msg: { t: "chat", entry: { body: { kind: "text", text: "hi" } } } },
+      { kind: "send", to: "b", msg: { t: "chat", entry: { body: { kind: "text", text: "hi" } } } },
+    ]);
+    expect(a.receive(JSON.stringify({ t: "chat", body: { kind: "text", text: "" } }))).toMatchObject([{ msg: { code: "bad_request" } }]);
+  });
+});

@@ -3,7 +3,11 @@
 // ("effects"); the caller owns the sockets.
 
 import {
+  CHAT_HISTORY,
+  CHAT_HISTORY_BYTES,
   DEFAULT_SEATS,
+  type ChatBody,
+  type ChatEntry,
   randomId,
   type JoinError,
   type MemberId,
@@ -29,7 +33,13 @@ interface Member {
   name: string;
   state: MemberState;
   resume: string;
+  /** Chat token bucket: burst CHAT_BURST, refilled at one message per second. */
+  chatTokens: number;
+  chatRefilledAt: number;
 }
+
+const CHAT_BURST = 10;
+const CHAT_REFILL_MS = 1000;
 
 interface Room {
   id: RoomId;
@@ -37,9 +47,15 @@ interface Room {
   members: Member[];
   hostId: MemberId | null;
   locked: boolean;
+  /** Oldest first. Lives only as long as the room has members. */
+  chat: { entry: ChatEntry; bytes: number }[];
+  chatBytes: number;
+  nextSeq: number;
 }
 
 interface Departed {
+  chatTokens: number;
+  chatRefilledAt: number;
   roomId: RoomId;
   expiresAt: number;
 }
@@ -110,11 +126,13 @@ export class Rooms {
     let room = this.rooms.get(roomId);
     let inheritHost = false;
     let mayPassLock = false;
+    let bucket: Pick<Member, "chatTokens" | "chatRefilledAt"> | undefined;
 
     if (resume !== null && room) {
       const stale = room.members.find((m) => m.resume === resume);
       if (stale) {
         // Half-open socket from the same client: drop the old presence first.
+        bucket = stale;
         inheritHost = room.hostId === stale.id;
         mayPassLock = true;
         effects.push({ kind: "close", to: stale.conn, reason: "replaced" });
@@ -126,6 +144,7 @@ export class Rooms {
       const gone = this.departed.get(resume);
       if (gone && gone.roomId === roomId) {
         mayPassLock = true;
+        bucket = gone;
         this.departed.delete(resume);
       }
     }
@@ -134,11 +153,13 @@ export class Rooms {
       if (room.members.length >= this.seats(roomId)) return { ok: false, error: "full", effects };
       if (room.locked && !mayPassLock) return { ok: false, error: "locked", effects };
     } else {
-      room = { id: roomId, members: [], hostId: null, locked: false };
+      room = { id: roomId, members: [], hostId: null, locked: false, chat: [], chatBytes: 0, nextSeq: 1 };
       this.rooms.set(roomId, room);
     }
 
-    const member: Member = { id: this.makeId(9) as MemberId, conn, name, state, resume: this.makeId(18) };
+    const member: Member = {
+      id: this.makeId(9) as MemberId, conn, name, state, resume: this.makeId(18), chatTokens: bucket?.chatTokens ?? CHAT_BURST, chatRefilledAt: bucket?.chatRefilledAt ?? this.now(),
+    };
     for (const other of room.members) {
       effects.push({ kind: "send", to: other.conn, msg: { t: "member-joined", member: publicInfo(member) } });
     }
@@ -151,7 +172,9 @@ export class Rooms {
       if (hostChanged && room.members.length > 1) effects.push(...this.broadcastRoom(room, member.id));
     }
 
-    effects.push({ kind: "send", to: conn, msg: { t: "joined", you: member.id, resume: member.resume, room: snapshot(room) } });
+    effects.push({ kind: "send", to: conn, msg: {
+      t: "joined", you: member.id, resume: member.resume, room: snapshot(room), chat: room.chat.map((c) => c.entry),
+    } });
     return { ok: true, memberId: member.id, effects };
   }
 
@@ -163,7 +186,7 @@ export class Rooms {
     this.byConn.delete(conn);
     room.members = room.members.filter((m) => m !== member);
     const wasHost = room.hostId === member.id;
-    this.departed.set(member.resume, { roomId: room.id, expiresAt: this.now() + this.resumeGraceMs });
+    this.departed.set(member.resume, { chatTokens: member.chatTokens, chatRefilledAt: member.chatRefilledAt, roomId: room.id, expiresAt: this.now() + this.resumeGraceMs });
 
     if (room.members.length === 0) {
       this.rooms.delete(room.id);
@@ -205,6 +228,29 @@ export class Rooms {
     const target = entry.room.members.find((m) => m.id === to);
     if (!target || target === entry.member) return [];
     return [{ kind: "send", to: target.conn, msg: { t: "signal", from: entry.member.id, data } }];
+  }
+
+  /** Stamp a chat message and send it to everyone, the sender included: the echo is its confirmation. */
+  chat(conn: ConnId, body: ChatBody): Effect[] {
+    const entry = this.byConn.get(conn);
+    if (!entry) return [notJoined(conn)];
+    const { room, member } = entry;
+    const now = this.now();
+    const refill = Math.floor((now - member.chatRefilledAt) / CHAT_REFILL_MS);
+    if (refill > 0) {
+      member.chatTokens = Math.min(CHAT_BURST, member.chatTokens + refill);
+      member.chatRefilledAt = member.chatTokens === CHAT_BURST ? now : member.chatRefilledAt + refill * CHAT_REFILL_MS;
+    }
+    if (member.chatTokens < 1) {
+      return [{ kind: "send", to: conn, msg: { t: "error", code: "slow_down", message: "You're sending messages too fast." } }];
+    }
+    member.chatTokens--;
+    const chat: ChatEntry = { seq: room.nextSeq++, from: member.id, name: member.name, at: now, body };
+    const bytes = new TextEncoder().encode(JSON.stringify(chat)).byteLength;
+    room.chat.push({ entry: chat, bytes });
+    room.chatBytes += bytes;
+    while (room.chat.length > CHAT_HISTORY || room.chatBytes > CHAT_HISTORY_BYTES) room.chatBytes -= room.chat.shift()!.bytes;
+    return room.members.map((m) => ({ kind: "send", to: m.conn, msg: { t: "chat", entry: chat } }));
   }
 
   private broadcastRoom(room: Room, except?: MemberId): Effect[] {

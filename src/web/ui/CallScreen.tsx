@@ -3,8 +3,10 @@ import { PRESET_IDS, type MemberId, type PresetId } from "../../shared/protocol.
 import type { Call, CallView } from "../rtc/call.ts";
 import { canPickSpeaker, listMics, listSpeakers, replayerName } from "../rtc/media.ts";
 import { PRESETS } from "../rtc/presets.ts";
+import { ChatPanel } from "./ChatPanel.tsx";
 import { initials, useLevel } from "./hooks.ts";
 import {
+  ChatIcon,
   ChevronIcon,
   ExpandIcon,
   GaugeIcon,
@@ -38,6 +40,31 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const [menu, setMenu] = useState<"share" | "mic" | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const focusChatInput = useRef(true);
+  const callRef = useRef<HTMLDivElement>(null);
+  const chatToggle = useRef<HTMLButtonElement>(null);
+  const closeChat = () => { setChatOpen(false); requestAnimationFrame(() => chatToggle.current?.focus()); };
+  const [chatOpen, setChatOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const sendInFlight = useRef(false);
+  const sendChat = async () => {
+    if (sendInFlight.current) return;
+    const text = draft;
+    sendInFlight.current = true;
+    setSending(true);
+    setDraft("");
+    let sent = false;
+    try {
+      sent = await call.sendChat(text);
+    } catch (err) {
+      console.warn(err);
+    }
+    sendInFlight.current = false;
+    setSending(false);
+    if (!sent) setDraft((typed) => (typed ? `${text}\n${typed}` : text));
+  };
+  const [dropping, setDropping] = useState(false);
   const shares = sharesOf(view);
   const stage = shares.find((s) => s.id === stageId) ?? shares[0] ?? null;
   const seatsTaken = view.members.length + 1;
@@ -53,9 +80,33 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
     prevKey.current = shareKey;
   }, [shareKey]);
 
+  useEffect(() => call.setChatOpen(chatOpen), [call, chatOpen]);
+  useEffect(() => {
+    const media = matchMedia("(max-width: 900px)");
+    const update = () => {
+      for (const child of callRef.current?.children ?? []) {
+        if (child instanceof HTMLElement && !child.classList.contains("chat")) child.inert = chatOpen && media.matches;
+      }
+    };
+    update();
+    media.addEventListener("change", update);
+    const observer = new MutationObserver(update);
+    if (callRef.current) observer.observe(callRef.current, { childList: true });
+    return () => { media.removeEventListener("change", update); observer.disconnect(); };
+  }, [chatOpen]);
+
+  const menuOpen = useRef(false);
+  menuOpen.current = menu !== null;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "Escape" && menuOpen.current && !e.isComposing && e.keyCode !== 229 && !e.defaultPrevented) {
+        e.preventDefault();
+        setMenu(null);
+        return;
+      }
+      const t = e.target;
+      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || (t instanceof HTMLElement && t.isContentEditable);
+      if (typing || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "m" && view.self.hasMic) call.setMuted(!view.self.muted);
       if (e.key === "Escape") setMenu(null);
     };
@@ -87,7 +138,30 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   };
 
   return (
-    <div class={`call${stage ? " has-stage" : ""}${showStats ? " has-stats" : ""}`} data-screen="call" data-phase={view.phase}>
+    <div
+      ref={callRef}
+      class={`call${stage ? " has-stage" : ""}${showStats ? " has-stats" : ""}${chatOpen ? " has-chat" : ""}`}
+      data-screen="call"
+      data-phase={view.phase}
+      onDragOver={(e) => {
+        if (!e.dataTransfer?.types.includes("Files")) return;
+        e.preventDefault();
+        setDropping(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.relatedTarget === null || !e.currentTarget.contains(e.relatedTarget as Node)) setDropping(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer?.types.includes("Files")) return;
+        e.preventDefault();
+        setDropping(false);
+        const files = [...e.dataTransfer.files];
+        if (files.length === 0) return;
+        call.shareFiles(files);
+        focusChatInput.current = false;
+        setChatOpen(true);
+      }}
+    >
       <header class="rail">
         <div class="rail-left">
           <span class="wordmark">Streamroom</span>
@@ -245,6 +319,22 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </div>
 
         <div class="dock-group">
+          <button
+            ref={chatToggle}
+            class="btn btn-dock chat-toggle"
+            aria-pressed={chatOpen}
+            aria-label={view.unread > 0 ? `Chat, ${view.unread} unread` : "Chat"}
+            data-testid="chat-toggle"
+            onClick={() => { focusChatInput.current = true; if (chatOpen) closeChat(); else setChatOpen(true); }}
+          >
+            <ChatIcon />
+            <span class="label">Chat</span>
+            {view.unread > 0 && !chatOpen && (
+              <span class="chat-badge" aria-hidden="true" data-testid="chat-badge">
+                {view.unread > 9 ? "9+" : view.unread}
+              </span>
+            )}
+          </button>
           <button class="btn btn-dock btn-leave" data-testid="leave" onClick={() => call.leave()}>
             <LeaveIcon />
             <span class="label">Leave</span>
@@ -252,6 +342,12 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </div>
       </footer>
 
+      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} menuOpen={menu !== null} draft={draft} setDraft={setDraft} sending={sending} send={sendChat} />}
+      {dropping && (
+        <div class="drop-veil" aria-hidden="true">
+          <p>Drop to share with the room</p>
+        </div>
+      )}
       {showStats && <StatsPanel call={call} onClose={() => setShowStats(false)} />}
     </div>
   );
