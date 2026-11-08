@@ -96,3 +96,21 @@ it("cancel stops further reads and sends and aborts shared hashing after its las
     vi.restoreAllMocks();
   }
 });
+it("tells the receiver when the transfer channel can't be opened, and the receiver can try again", async () => {
+  const sender = new FileTransfers({open: () => null, maxMessageSize: () => 16384, changed: () => {}});
+  live.push(sender);
+  const senderCtl = new Channel("ctl");
+  sender.channel(member, senderCtl.rtc());
+  sender.offer(meta, new Blob([new Uint8Array(64)]));
+  senderCtl.receive({t:"get",file:meta.id,transfer:"attempt00000",offset:0});
+  await tick();
+  expect(senderCtl.sent.map((m) => JSON.parse(m as string))).toEqual([{t:"fail",transfer:"attempt00000",reason:"broken"}]);
+
+  const {t, ctl} = setup();
+  const asks = () => ctl.sent.map((m) => JSON.parse(m as string)).filter((m) => m.t === "get");
+  expect(t.download(member, meta)).toBeNull();
+  ctl.receive({t:"fail",transfer:asks()[0].transfer,reason:"broken"});
+  expect(t.view().incoming.get(`${member}/${meta.id}`)).toEqual({phase:"failed",reason:"broken"});
+  expect(t.download(member, meta)).toBeNull();
+  expect(asks()).toHaveLength(2);
+});

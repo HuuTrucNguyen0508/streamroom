@@ -112,6 +112,8 @@ export class Call {
   private name = "";
   private notice: string | null = null;
   private chat: ChatEntry[] = [];
+  /** Highest seq this session's room has sent. Kept file cards can carry seqs from an earlier room. */
+  private lastSeq = 0;
   private pendingChat: { body: ChatBody; sender: MemberId | null; afterSeq: number; timer: ReturnType<typeof setTimeout>; resolve: (ok: boolean) => void }[] = [];
   private unread = 0;
   private chatOpen = false;
@@ -255,6 +257,7 @@ export class Call {
         const fromOthers = history.filter((e) => !this.ownIds.has(e.from)).length;
         this.unread = this.chatOpen ? 0 : this.chat.length === 0 ? fromOthers : Math.min(this.unread, fromOthers);
         this.chat = this.keepDownloads(history);
+        this.lastSeq = history.at(-1)?.seq ?? 0;
         this.phase = "in-call";
         this.emit();
         return;
@@ -287,6 +290,7 @@ export class Call {
         const entry = validEntry(msg.entry);
         if (!entry) return;
         this.chat = this.keepDownloads([...this.chat, entry]);
+        this.lastSeq = Math.max(this.lastSeq, entry.seq);
         if (entry.from === this.selfId) {
           const pending = this.pendingChat.find((p) => p.sender === entry.from && entry.seq > p.afterSeq && JSON.stringify(p.body) === JSON.stringify(entry.body));
           if (pending) this.settleChat(pending, true);
@@ -547,7 +551,7 @@ export class Call {
   }
 
   private keepDownloads(history: ChatEntry[]): ChatEntry[] {
-    return retainDownloadCards(this.chat, history, this.transfers.view());
+    return retainFileCards(this.chat, history, this.transfers.view());
   }
 
   private settleChat(pending: (typeof this.pendingChat)[number], accepted: boolean): void {
@@ -564,7 +568,7 @@ export class Call {
       this.notice = "You're sending messages too fast. Wait a moment and try again.";
     } else {
       const pending = {
-        body, sender: this.selfId, afterSeq: this.chat.at(-1)?.seq ?? 0, resolve,
+        body, sender: this.selfId, afterSeq: this.lastSeq, resolve,
         timer: setTimeout(() => {
           // Delivery is unknown. Restoring the draft here could send it twice.
           this.settleChat(pending, true);
@@ -738,8 +742,8 @@ function validEntry(raw: unknown): ChatEntry | null {
   return { seq: e.seq, from: e.from, name, at: e.at, body };
 }
 
-export function retainDownloadCards(previous: ChatEntry[], history: ChatEntry[], transfers: TransfersView): ChatEntry[] {
-  const keep = (e: ChatEntry) => e.body.kind === "file" && transfers.incoming.has(downloadKey(e.from, e.body.file.id));
+export function retainFileCards(previous: ChatEntry[], history: ChatEntry[], transfers: TransfersView): ChatEntry[] {
+  const keep = (e: ChatEntry) => e.body.kind === "file" && (transfers.incoming.has(downloadKey(e.from, e.body.file.id)) || transfers.offered.has(e.body.file.id));
   const keys = new Set(history.map((e) => `${e.from}/${e.seq}`));
   const saved = previous.filter((e) => keep(e) && !keys.has(`${e.from}/${e.seq}`));
   return [...saved, ...history.slice(0, -MAX_CHAT_ENTRIES).filter(keep), ...history.slice(-MAX_CHAT_ENTRIES)];

@@ -137,7 +137,8 @@ export class Rooms {
         mayPassLock = true;
         effects.push({ kind: "close", to: stale.conn, reason: "replaced" });
         effects.push(...this.leave(stale.conn));
-        room = this.rooms.get(roomId);
+        // Leaving may have emptied and deleted the room, but this client is coming straight back.
+        if (!this.rooms.has(roomId)) this.rooms.set(roomId, room);
       }
     }
     if (resume !== null && !mayPassLock) {

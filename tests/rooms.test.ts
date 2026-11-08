@@ -255,6 +255,18 @@ describe("Rooms chat", () => {
   });
 });
 
+it("keeps chat and the lock when a member alone in the room replaces its half-open socket", () => {
+  const { rooms } = setup();
+  const a = joinOk(rooms, "a");
+  rooms.chat("a", {kind:"text",text:"still here?"});
+  rooms.setLocked("a", true);
+  const back = joinOk(rooms, "a2", ROOM, a.joined.resume);
+  expect(back.effects).toContainEqual({ kind: "close", to: "a", reason: "replaced" });
+  expect(back.joined.chat.map((e) => e.body)).toEqual([{kind:"text",text:"still here?"}]);
+  expect(back.joined.room).toMatchObject({ hostId: back.memberId, locked: true });
+  expect(sent(rooms.chat("a2", {kind:"text",text:"next"}), "a2")).toMatchObject([{t:"chat",entry:{seq:2}}]);
+});
+
 it("carries chat rate limits through replacement and disconnected resume", () => {
   const { rooms } = setup();
   const a = joinOk(rooms, "a");
