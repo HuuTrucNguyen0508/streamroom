@@ -547,7 +547,7 @@ export class Call {
   }
 
   private keepDownloads(history: ChatEntry[]): ChatEntry[] {
-    return retainDownloadCards(this.chat, history, this.transfers.view());
+    return retainFileCards(this.chat, history, this.transfers.view());
   }
 
   private settleChat(pending: (typeof this.pendingChat)[number], accepted: boolean): void {
@@ -738,8 +738,8 @@ function validEntry(raw: unknown): ChatEntry | null {
   return { seq: e.seq, from: e.from, name, at: e.at, body };
 }
 
-export function retainDownloadCards(previous: ChatEntry[], history: ChatEntry[], transfers: TransfersView): ChatEntry[] {
-  const keep = (e: ChatEntry) => e.body.kind === "file" && transfers.incoming.has(downloadKey(e.from, e.body.file.id));
+export function retainFileCards(previous: ChatEntry[], history: ChatEntry[], transfers: TransfersView): ChatEntry[] {
+  const keep = (e: ChatEntry) => e.body.kind === "file" && (transfers.incoming.has(downloadKey(e.from, e.body.file.id)) || transfers.offered.has(e.body.file.id));
   const keys = new Set(history.map((e) => `${e.from}/${e.seq}`));
   const saved = previous.filter((e) => keep(e) && !keys.has(`${e.from}/${e.seq}`));
   return [...saved, ...history.slice(0, -MAX_CHAT_ENTRIES).filter(keep), ...history.slice(-MAX_CHAT_ENTRIES)];

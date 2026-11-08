@@ -332,8 +332,13 @@ export class FileTransfers {
 
   private async pump(send: Send): Promise<void> {
     const offer = this.offers.get(send.file);
-    const dc = offer ? this.links.open(send.to, `${XFER_PREFIX}${send.id}`) : null;
-    if (!offer || !dc) throw new Error("no offer or link");
+    if (!offer) throw new Error("no offer");
+    const dc = this.links.open(send.to, `${XFER_PREFIX}${send.id}`);
+    if (!dc) {
+      // No channel will ever arrive, so tell the receiver instead of leaving it waiting.
+      this.sendCtl(send.to, { t: "fail", transfer: send.id, reason: "broken" });
+      throw new Error("no link");
+    }
     const signal = send.abort.signal;
     signal.addEventListener("abort", () => { detach(dc); dc.close(); }, { once: true });
     dc.binaryType = "arraybuffer";

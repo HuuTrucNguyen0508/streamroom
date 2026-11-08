@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { Call, retainDownloadCards } from "../src/web/rtc/call.ts";
+import { Call, retainFileCards } from "../src/web/rtc/call.ts";
 import type { ChatEntry, ClientMessage, FileId, FileMeta, MemberId, RoomId } from "../src/shared/protocol.ts";
 import type { SignalingEvents } from "../src/web/rtc/signaling.ts";
 const signal = vi.hoisted(() => ({ events: null as SignalingEvents | null, sent: [] as ClientMessage[] }));
@@ -45,12 +45,21 @@ it("reports messages with no visible content", async () => {
 it("keeps retained download cards across history replacement and the 500-entry cap", () => {
   const card: ChatEntry = {seq:1,from:member,name:"Sender",at:1,body:{kind:"file",file:meta}};
   const view = {incoming:new Map([[`${member}/${meta.id}`, {phase:"done" as const,blob:new Blob()}]]),outgoing:new Map(),offered:new Set<FileId>()};
-  expect(retainDownloadCards([card], [], view)).toEqual([card]);
+  expect(retainFileCards([card], [], view)).toEqual([card]);
   const history = [card, ...Array.from({length:500}, (_,i):ChatEntry => ({...card,seq:i+2,body:{kind:"text",text:"hello"}}))];
-  expect(retainDownloadCards(history, history, view)).toHaveLength(501);
-  expect(retainDownloadCards(history, history, view)[0]).toEqual(card);
+  expect(retainFileCards(history, history, view)).toHaveLength(501);
+  expect(retainFileCards(history, history, view)[0]).toEqual(card);
   view.incoming.clear();
-  expect(retainDownloadCards(history, history, view)).toHaveLength(500);
+  expect(retainFileCards(history, history, view)).toHaveLength(500);
+});
+
+it("keeps your own shared file's card past the 500-entry cap until you stop sharing", () => {
+  const card: ChatEntry = {seq:1,from:"me0000001" as MemberId,name:"Me",at:1,body:{kind:"file",file:meta}};
+  const view = {incoming:new Map(),outgoing:new Map(),offered:new Set<FileId>([meta.id])};
+  const history = [card, ...Array.from({length:500}, (_,i):ChatEntry => ({...card,seq:i+2,body:{kind:"text",text:"hello"}}))];
+  expect(retainFileCards(history, history, view)[0]).toEqual(card);
+  view.offered.clear();
+  expect(retainFileCards(history, history, view)).toHaveLength(500);
 });
 
 it.each(["bad_request", "not_joined"] as const)("settles %s before accepting the next echo", async (code) => {

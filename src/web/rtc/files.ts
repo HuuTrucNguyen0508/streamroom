@@ -27,7 +27,8 @@ export function newTransferId(): TransferId {
 
 export const XFER_PREFIX = "xfer:";
 
-export type SendFailure = "gone" | "bad_offset";
+/** `broken`: the sender couldn't open the transfer channel; the receiver may try again. */
+export type SendFailure = "gone" | "bad_offset" | "broken";
 
 export type Ctl =
   | { t: "get"; transfer: TransferId; file: FileId; offset: number }
@@ -58,7 +59,7 @@ export function parseCtl(raw: unknown): Ctl | null {
     case "ack":
       return { t: "ack", transfer };
     case "fail":
-      return v.reason === "gone" || v.reason === "bad_offset" ? { t: "fail", transfer, reason: v.reason } : null;
+      return v.reason === "gone" || v.reason === "bad_offset" || v.reason === "broken" ? { t: "fail", transfer, reason: v.reason } : null;
     default:
       return null;
   }
