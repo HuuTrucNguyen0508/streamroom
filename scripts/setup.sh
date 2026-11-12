@@ -61,16 +61,14 @@ ask_yes_no() { # ask_yes_no QUESTION; default No
 
 # ---------- env file ----------
 
-env_get() { # env_get KEY [FILE]: last value of KEY, surrounding quotes removed
+# Let Compose parse quoting, comments, CRLF and interpolation exactly as it will at startup.
+# An empty Compose model also works before TURN_SECRET has been generated.
+env_get() { # env_get KEY [FILE]
   local file="${2:-$env_file}"
   [[ -f "$file" ]] || return 0
-  awk -v key="$1" '
-    index($0, key "=") == 1 { v = substr($0, length(key) + 2); found = 1 }
-    END {
-      if (!found) exit
-      if (v ~ /^".*"$/ || v ~ /^\x27.*\x27$/) v = substr(v, 2, length(v) - 2)
-      print v
-    }' "$file"
+  printf 'services: {}\n' |
+    docker compose -f - --env-file "$file" config --environment |
+    awk -v key="$1" 'index($0, key "=") == 1 { print substr($0, length(key) + 2) }'
 }
 
 env_value() { # env_value KEY DEFAULT
@@ -86,7 +84,7 @@ compose() { docker compose --env-file "$env_file" --profile public "$@"; }
 is_ipv4() {
   local IFS=. o
   local -a parts
-  [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  [[ "$1" =~ ^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$ ]] || return 1
   read -r -a parts <<< "$1"
   for o in "${parts[@]}"; do ((10#$o <= 255)) || return 1; done
 }
@@ -95,7 +93,7 @@ is_ipv4() {
 is_private_ipv4() {
   local a b
   IFS=. read -r a b _ _ <<< "$1"
-  ((a == 0 || a == 10 || a == 127)) && return 0
+  ((a == 0 || a == 10 || a == 127 || a >= 224)) && return 0
   ((a == 100 && b >= 64 && b <= 127)) && return 0
   ((a == 169 && b == 254)) && return 0
   ((a == 172 && b >= 16 && b <= 31)) && return 0
@@ -175,12 +173,13 @@ detect_network() {
     fi
     say "$domain resolves to $ip"
   fi
-  if is_private_ipv4 "$ip" && ! is_local_ipv4 "$ip"; then
+  is_ipv4 "$ip" || die "No usable IPv4 address found for $domain. An IPv4 A record is required."
+  if is_private_ipv4 "$ip"; then
     warn "$ip is a private address; friends outside your network can't reach it, and Let's Encrypt can't issue a certificate."
   fi
   if is_local_ipv4 "$ip"; then
     net_shape=vps
-    say "$ip is on this machine's network interface: a server with its own public IP. No port forwarding needed."
+    say "$ip is assigned directly to this machine; TURN_EXTERNAL_IP will stay empty."
   else
     net_shape=nat
     turn_external_ip="$ip"
@@ -319,6 +318,7 @@ write_env() {
     [[ "$(env_get "${kv%%=*}" "$base")" == "${kv#*=}" ]] || changes+=("$kv")
   done
   if [[ -f "$env_file" ]] && ((${#changes[@]} == 0)); then
+    chmod 600 "$env_file"
     say "$env_file is already up to date."
     return
   fi
@@ -328,12 +328,23 @@ write_env() {
     BEGIN {
       n = split(ENVIRON["SETUP_KVS"], kvs, "\n")
       for (i = 1; i <= n; i++) if (kvs[i] != "") {
-        k = substr(kvs[i], 1, index(kvs[i], "=") - 1); want[k] = kvs[i]; order[++m] = k
+        k = substr(kvs[i], 1, index(kvs[i], "=") - 1)
+        v = substr(kvs[i], index(kvs[i], "=") + 1)
+        # Quote literal values for Compose, including dollars and backslashes.
+        quoted = ""
+        for (j = 1; j <= length(v); j++) {
+          c = substr(v, j, 1)
+          if (c == "\\" || c == "\"") quoted = quoted "\\"
+          quoted = quoted (c == "$" ? "$$" : c)
+        }
+        want[k] = k "=\"" quoted "\""; order[++m] = k
       }
     }
     {
-      k = substr($0, 1, index($0, "=") - 1)
-      if (index($0, "=") > 1 && (k in want)) { if (!(k in done)) print want[k]; done[k] = 1; next }
+      line = $0; ending = (sub(/\r$/, "", line) ? "\r" : "")
+      sub(/^[ \t]*(export[ \t]+)?/, "", line)
+      k = substr(line, 1, index(line, "=") - 1); sub(/[ \t]+$/, "", k)
+      if (index(line, "=") > 1 && (k in want)) { if (!(k in done)) print want[k] ending; done[k] = 1; next }
       print
     }
     END { for (i = 1; i <= m; i++) if (!(order[i] in done)) print want[order[i]] }
@@ -341,8 +352,7 @@ write_env() {
   if [[ -f "$env_file" ]]; then
     backup="$env_file.bak.$(date +%Y%m%d-%H%M%S)"
     [[ -e "$backup" ]] && backup="$backup-$$"
-    cp -p "$env_file" "$backup"
-    chmod 600 "$backup"
+    (umask 077; set -o noclobber; cat "$env_file" > "$backup")
     say "Backed up the previous file to $backup"
   fi
   chmod 600 "$tmp"
@@ -373,7 +383,14 @@ wait_for() { # wait_for SECONDS COMMAND...
   done
 }
 
-app_health() { curl -fsS --max-time 3 "http://127.0.0.1:$(env_value PORT 8080)/healthz"; }
+# Require the app response and HTTP 200, rather than accepting redirects or an
+# unrelated service on the configured port. Never send these local probes to a proxy.
+health_response() {
+  curl --noproxy '*' -fsS --write-out '\n%{http_code}\n' "$@" |
+    awk '/"ok"[[:space:]]*:[[:space:]]*true/ { ok = 1 } END { exit !(ok && $0 == "200") }'
+}
+
+app_health() { health_response --max-time 3 "http://127.0.0.1:$(env_value PORT 8080)/healthz"; }
 
 https_url() {
   local https
@@ -384,7 +401,7 @@ https_url() {
 https_health() {
   local -a insecure=()
   [[ "$domain" == localhost ]] && insecure=(-k)
-  curl -fsS --max-time 5 "${insecure[@]}" --resolve "$domain:$(env_value HTTPS_PORT 443):127.0.0.1" "$(https_url)/healthz"
+  health_response --max-time 5 "${insecure[@]}" --resolve "$domain:$(env_value HTTPS_PORT 443):127.0.0.1" "$(https_url)/healthz"
 }
 
 # Returns non-zero when a check fails. WAIT is how long to keep retrying each check.
@@ -452,8 +469,16 @@ do_setup() {
     say "Generated a new HOST_PASSPHRASE."
   fi
   port="$(env_value PORT 8080)"
+  # Pin coturn to the address receiving traffic, rather than its first non-Docker
+  # interface, which can be a VPN or another unrelated interface.
+  local relay_ip
+  relay_ip="$(env_get TURN_RELAY_IP)"
+  if [[ -z "$relay_ip" ]]; then
+    if [[ "$net_shape" == vps ]]; then relay_ip="${public_ip:-$(resolve_ipv4 "$domain")}";
+    else relay_ip="$lan_ip"; fi
+  fi
   write_env "DOMAIN=$domain" APP_BIND=127.0.0.1 "PORT=$port" "TURN_SECRET=$turn_secret" \
-    "HOST_PASSPHRASE=$passphrase" "TURN_EXTERNAL_IP=$turn_external_ip"
+    "HOST_PASSPHRASE=$passphrase" "TURN_EXTERNAL_IP=$turn_external_ip" "TURN_RELAY_IP=$relay_ip"
   compose config -q || die "docker compose rejected $env_file."
   local turn_host
   turn_host="$(env_get TURN_HOST)"
