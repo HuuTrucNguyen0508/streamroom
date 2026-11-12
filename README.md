@@ -36,13 +36,26 @@ Open http://localhost:8080. Copy the room's invite link to invite friends. If th
 
 Microphone and screen capture require HTTPS outside localhost. A room link grants access, so share it privately. The host can lock the room and leaves host control to the next participant when leaving.
 
-For a public host, point a domain's DNS at the server and set `DOMAIN` in `.env`. Set `TURN_HOST` to a DNS hostname that reaches coturn directly, without an HTTP proxy. Open TCP 80 and 443 for Caddy, TCP and UDP 3478 for TURN, and UDP 49160–49200 for relay media. Forward those ports if the host sits behind a router, and set `TURN_EXTERNAL_IP` to its public IP. Then run:
+To host it publicly on a Linux server with Docker:
+
+1. Point a DNS A record for your domain at the server's public IPv4 address.
+2. Run the setup script from the repository root and enter the domain when asked:
+
+   ```sh
+   scripts/setup.sh
+   ```
+
+3. Open or forward the ports it prints: TCP 80 and 443 for Caddy, TCP and UDP 3478 for TURN, UDP 443 for HTTP/3 (optional), and UDP 49160–49200 for relay media.
+
+The script checks Docker, works out whether the server has its own public IP or sits behind a router, and writes `.env`. It generates `TURN_SECRET` and `HOST_PASSPHRASE`, sets `DOMAIN`, binds the app to `127.0.0.1` behind Caddy, and sets `TURN_EXTERNAL_IP` when the server is behind NAT. Then it starts the `public` profile and checks HTTPS through Caddy. It prints the URL and the host passphrase. Open `https://your-domain`, enter the passphrase, and share the room link. Running it again keeps existing secrets and backs up `.env` to `.env.bak.<timestamp>` before changing it. It doesn't install Docker. It asks before it changes ufw or firewalld rules. Behind a router, it prints the port forwards to this machine's LAN address. If your ISP uses CGNAT, port forwarding cannot work; use a VPS. `--domain`, `--yes` and `--no-start` allow noninteractive runs, and `--help` lists every option.
 
 ```sh
-docker compose --profile public up -d --build
+scripts/setup.sh status   # network, ports, containers and health checks; changes nothing
+scripts/setup.sh update   # git pull --ff-only, then rebuild and restart
+scripts/setup.sh stop     # stop the stack; volumes and certificates stay
 ```
 
-Open `https://your-domain` and share the room link. Caddy handles HTTPS and WebSocket forwarding. To stop this profile, use `docker compose --profile public down`.
+To set it up by hand instead, copy `.env.example` to `.env`, then set `DOMAIN`, `TURN_SECRET` (`openssl rand -base64 32`), `HOST_PASSPHRASE` and `APP_BIND=127.0.0.1`. Set `TURN_EXTERNAL_IP` to the public IP when the host sits behind NAT. `TURN_HOST` can stay empty, because browsers then use the page's hostname, which is `DOMAIN`. Run `docker compose --profile public up -d --build`, and stop it with `docker compose --profile public down`. Caddy handles HTTPS and WebSocket forwarding.
 
 For a private setup, put all friends on the same Tailscale network and use Tailscale Serve to expose the app with HTTPS. Set `TURN_HOST` to a hostname or IP reachable by those friends. Tailscale Serve carries the web connection, not TURN's UDP traffic. Prefer direct peer connections on that network. The bundled coturn policy blocks private peer addresses except its configured relay IP, so relay-only calls across Tailscale may require a deliberately scoped coturn policy change.
 
