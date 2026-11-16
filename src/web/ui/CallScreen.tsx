@@ -3,7 +3,7 @@ import { PRESET_IDS, type MemberId, type PresetId } from "../../shared/protocol.
 import type { Call, CallView } from "../rtc/call.ts";
 import { canPickSpeaker, listMics, listSpeakers, replayerName } from "../rtc/media.ts";
 import { PRESETS } from "../rtc/presets.ts";
-import { ChatPanel } from "./ChatPanel.tsx";
+import { ChatPanel, type Staged } from "./ChatPanel.tsx";
 import { initials, useLevel } from "./hooks.ts";
 import {
   ChatIcon,
@@ -19,7 +19,10 @@ import {
   StopScreenIcon,
   UnlockIcon,
 } from "./icons.tsx";
+import { pastedFiles } from "./preview.ts";
 import { StatsPanel } from "./StatsPanel.tsx";
+
+let nextStagedKey = 1;
 
 interface Share {
   id: MemberId | "self";
@@ -48,15 +51,25 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const sendInFlight = useRef(false);
+  const [staged, setStaged] = useState<Staged[]>([]);
+  const stageFiles = (files: readonly File[]) => setStaged((now) => [...now, ...files.map((file) => ({ key: nextStagedKey++, file }))]);
   const sendChat = async () => {
     if (sendInFlight.current) return;
     const text = draft;
+    const files = staged;
+    // Text goes first so a caption lands above the files it introduces.
+    const textSent = text.trim() === "" ? null : call.sendChat(text);
+    if (files.length > 0) {
+      const kept = new Set(call.shareFiles(files.map((s) => s.file)));
+      setStaged((now) => [...files.filter((s) => kept.has(s.file)), ...now.filter((s) => !files.includes(s))]);
+    }
+    if (!textSent) return;
     sendInFlight.current = true;
     setSending(true);
     setDraft("");
     let sent = false;
     try {
-      sent = await call.sendChat(text);
+      sent = await textSent;
     } catch (err) {
       console.warn(err);
     }
@@ -114,6 +127,23 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [call, view.self.hasMic, view.self.muted]);
 
+  // Pasting files anywhere on the call stages them in the chat, except into another text field.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target;
+      const field = t instanceof HTMLInputElement || (t instanceof HTMLTextAreaElement && !t.classList.contains("chat-input")) || (t instanceof HTMLElement && t.isContentEditable);
+      if (field) return;
+      const files = pastedFiles(e.clipboardData);
+      if (!files) return;
+      e.preventDefault();
+      stageFiles(files);
+      focusChatInput.current = true;
+      setChatOpen(true);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 2200);
@@ -157,8 +187,8 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         setDropping(false);
         const files = [...e.dataTransfer.files];
         if (files.length === 0) return;
-        call.shareFiles(files);
-        focusChatInput.current = false;
+        stageFiles(files);
+        focusChatInput.current = true;
         setChatOpen(true);
       }}
     >
@@ -269,13 +299,18 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
             </button>
           )}
           {view.self.hasMic && (
-            <MicMenu
+            <AudioMenu
               open={menu === "mic"}
               onToggle={() => setMenu(menu === "mic" ? null : "mic")}
-              current={view.micDeviceId}
-              onPick={(id) => {
+              mic={view.micDeviceId}
+              speaker={view.speakerId}
+              onPickMic={(id) => {
                 setMenu(null);
                 void run(call.switchMic(id), "Couldn't switch to that microphone.");
+              }}
+              onPickSpeaker={(id) => {
+                setMenu(null);
+                void run(call.setSpeaker(id), "Couldn't play the call on that device. Choose another one.");
               }}
             />
           )}
@@ -342,10 +377,10 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </div>
       </footer>
 
-      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} menuOpen={menu !== null} draft={draft} setDraft={setDraft} sending={sending} send={sendChat} />}
+      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} menuOpen={menu !== null} draft={draft} setDraft={setDraft} staged={staged} stage={stageFiles} unstage={(key) => setStaged((now) => now.filter((s) => s.key !== key))} sending={sending} send={sendChat} />}
       {dropping && (
         <div class="drop-veil" aria-hidden="true">
-          <p>Drop to share with the room</p>
+          <p>Drop to add to the chat</p>
         </div>
       )}
       {showStats && <StatsPanel call={call} onClose={() => setShowStats(false)} />}
@@ -437,24 +472,57 @@ function Seat({ name, you, host, muted, sharing, connection, level, volume, onVo
   );
 }
 
-function MicMenu({ open, onToggle, current, onPick }: { open: boolean; onToggle: () => void; current: string | null; onPick: (id: string) => void }) {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+interface AudioMenuProps {
+  open: boolean;
+  onToggle: () => void;
+  mic: string | null;
+  /** "" is the system default. */
+  speaker: string;
+  onPickMic: (id: string) => void;
+  onPickSpeaker: (id: string) => void;
+}
+
+/** Microphone and, where the browser can route playback, the device the call plays on. */
+function AudioMenu({ open, onToggle, mic, speaker, onPickMic, onPickSpeaker }: AudioMenuProps) {
+  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  const [speakers, setSpeakers] = useState<{ defaultLabel: string; devices: MediaDeviceInfo[] } | null>(null);
   useEffect(() => {
-    if (open) void listMics().then(setDevices);
+    if (!open) return;
+    void listMics().then(setMics);
+    if (canPickSpeaker()) void listSpeakers().then(setSpeakers).catch(() => undefined);
   }, [open]);
+  const echoHint = (label: string) => replayerName(label) && <span class="menu-item-hint">Replays the call, so friends hear their own voice</span>;
   return (
     <div class="menu-anchor">
-      <button class="btn btn-dock btn-icon" aria-expanded={open} aria-label="Choose microphone" onClick={onToggle}>
+      <button class="btn btn-dock btn-icon" aria-expanded={open} aria-label="Choose microphone and speaker" onClick={onToggle}>
         <ChevronIcon />
       </button>
       {open && (
-        <div class="menu" role="menu" aria-label="Microphone">
-          {devices.length === 0 && <p class="menu-empty">No other microphones found.</p>}
-          {devices.map((d, i) => (
-            <button key={d.deviceId} role="menuitemradio" aria-checked={d.deviceId === current} class="menu-item" onClick={() => onPick(d.deviceId)}>
-              <span class="menu-item-title">{d.label || `Microphone ${i + 1}`}</span>
-            </button>
-          ))}
+        <div class="menu" role="menu" aria-label="Audio devices" data-testid="audio-menu">
+          <div role="group" aria-labelledby="menu-mics" class="menu-group">
+            <p id="menu-mics" class="menu-heading">Microphone</p>
+            {mics.length === 0 && <p class="menu-empty">No other microphones found.</p>}
+            {mics.map((d, i) => (
+              <button key={d.deviceId} role="menuitemradio" aria-checked={d.deviceId === mic} class="menu-item" onClick={() => onPickMic(d.deviceId)}>
+                <span class="menu-item-title">{d.label || `Microphone ${i + 1}`}</span>
+              </button>
+            ))}
+          </div>
+          {speakers && (
+            <div role="group" aria-labelledby="menu-speakers" class="menu-group">
+              <p id="menu-speakers" class="menu-heading">Call plays on</p>
+              <button role="menuitemradio" aria-checked={speaker === ""} class="menu-item" onClick={() => onPickSpeaker("")}>
+                <span class="menu-item-title">System default{speakers.defaultLabel ? `: ${speakers.defaultLabel}` : ""}</span>
+                {echoHint(speakers.defaultLabel)}
+              </button>
+              {speakers.devices.map((d, i) => (
+                <button key={d.deviceId} role="menuitemradio" aria-checked={d.deviceId === speaker} class="menu-item" onClick={() => onPickSpeaker(d.deviceId)}>
+                  <span class="menu-item-title">{d.label || `Speaker ${i + 1}`}</span>
+                  {echoHint(d.label)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -483,9 +551,13 @@ function ShareAudio({ call, view, onError }: { call: Call; view: CallView; onErr
   const sharingSystemAudio = view.audioSource === "browser" && !view.noDisplayAudio;
   const playingOn = view.speakerId ? speakers.devices.find((d) => d.deviceId === view.speakerId)?.label ?? "" : speakers.defaultLabel;
   const replayer = sharingSystemAudio ? replayerName(playingOn) : null;
+  // Without restrictOwnAudio the capture records the default output, call included. Playing the
+  // call on another device keeps it out.
+  const callCaptured = sharingSystemAudio && view.callInDisplayAudio && !replayer && playingOn === speakers.defaultLabel;
   return <section class="share-audio" aria-label="Screen share audio">
     {view.noDisplayAudio && view.audioSource === "browser" && <p class="share-audio-warning" role="status" data-testid="no-sound">Your screen has no audio. {tip} You can also share a browser tab and tick "Also share tab audio".</p>}
     {replayer && <p class="share-audio-warning" role="status" data-testid="replayer-echo">The call plays through {replayer}, so your friends hear themselves in your shared sound. In "Call plays on", pick your headset or speakers.</p>}
+    {callCaptured && <p class="share-audio-warning" role="status" data-testid="call-captured">Your browser can't leave the call out of your shared sound, so your friends hear themselves.{pickSpeaker ? ' In "Call plays on", pick headphones or speakers that aren\'t your system default, or share a browser tab instead.' : " Share a browser tab instead, or use Chrome or Edge on Windows or macOS."}</p>}
     <div class="share-audio-fields">
       {pickSpeaker && sharingSystemAudio && (
         <label class="share-audio-field"><span class="field-label">Call plays on</span>

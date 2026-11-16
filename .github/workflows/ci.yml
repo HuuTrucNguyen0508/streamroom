@@ -20,6 +20,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      - name: Shell scripts
+        run: |
+          bash -n scripts/setup.sh
+          shellcheck scripts/setup.sh scripts/linux-game-audio.sh
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm cf:typecheck

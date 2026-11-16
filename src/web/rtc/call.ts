@@ -19,11 +19,12 @@ import {
   type ServerMessage,
 } from "../../shared/protocol.ts";
 import { AudioEngine, type Meter } from "./audio.ts";
-import { getMic, getScreen, micConstraints } from "./media.ts";
+import { canPickSpeaker, capturesCallAudio, getMic, getScreen, micConstraints, speakerBehindReplayer } from "./media.ts";
 import { PeerLink } from "./peer.ts";
 import { AUDIO_MAX_BITRATE, PRESETS } from "./presets.ts";
 import { Signaling } from "./signaling.ts";
 import { StatsSampler, type MediaLabel, type PeerStats } from "./stats.ts";
+import { PREVIEW_FETCH_BYTES, previewKind } from "./files.ts";
 import { FileTransfers, downloadKey, type TransfersView } from "./transfers.ts";
 
 export type Phase = "idle" | "connecting" | "in-call" | "reconnecting" | "full" | "locked" | "left";
@@ -52,6 +53,8 @@ export interface CallView {
   localScreen: MediaStream | null;
   audioSource: string;
   noDisplayAudio: boolean;
+  /** The share's system audio would carry the call back to friends (see capturesCallAudio). */
+  callInDisplayAudio: boolean;
   members: RemoteView[];
   relayOnly: boolean;
   notice: string | null;
@@ -101,7 +104,13 @@ export class Call {
   private browserAudio: MediaStreamTrack | null = null;
   private audioSource = savedAudioSource();
   private speakerId = "";
+  /** The user picked a device by name; never move the call off it. */
+  private speakerChosen = false;
+  /** The call was moved off a replayer automatically (see avoidReplayer). */
+  private speakerMoved = false;
+  private replayerNoticed = false;
   private noDisplayAudio = false;
+  private callInDisplayAudio = false;
   private audioRevision = 0;
   private state: MemberState = { muted: false, hasMic: false, share: null };
   private micDeviceId: string | null = null;
@@ -120,6 +129,7 @@ export class Call {
   private readonly ownIds = new Set<MemberId>();
   /** Mirrors the server's chat limit so a refused message stays in the composer. */
   private readonly chatBucket = new TokenBucket(9, 1100);
+  private readonly previewFetched = new Set<string>();
   private readonly transfers = new FileTransfers({
     open: (member, label) => this.remotes.get(member)?.link?.openChannel(label) ?? null,
     maxMessageSize: (member) => this.remotes.get(member)?.link?.maxMessageSize ?? 0,
@@ -141,6 +151,7 @@ export class Call {
     });
     this.resume = readResume(roomId);
     const speaker = savedSpeaker();
+    this.speakerChosen = speaker !== "";
     // A saved device that's gone (unplugged headset) leaves the call on the system default.
     if (speaker) void this.audio.setSink(speaker).then(() => { this.speakerId = speaker; this.emit(); }, () => undefined);
     this.view = this.buildView();
@@ -179,6 +190,7 @@ export class Call {
       localScreen: this.screen,
       audioSource: this.audioSource,
       noDisplayAudio: this.noDisplayAudio,
+      callInDisplayAudio: this.callInDisplayAudio,
       relayOnly: this.options.relayOnly,
       notice: this.notice,
       chat: this.chat,
@@ -208,9 +220,12 @@ export class Call {
     this.state = { ...this.state, hasMic: mic !== null };
     this.setPhase("connecting");
     this.sig.connect();
+    navigator.mediaDevices.addEventListener("devicechange", this.onDeviceChange);
+    void this.avoidReplayer();
   }
 
   leave(): void {
+    navigator.mediaDevices.removeEventListener("devicechange", this.onDeviceChange);
     this.sig.close();
     for (const pending of [...this.pendingChat]) this.settleChat(pending, true);
     for (const id of [...this.remotes.keys()]) this.dropRemote(id);
@@ -258,6 +273,7 @@ export class Call {
         this.unread = this.chatOpen ? 0 : this.chat.length === 0 ? fromOthers : Math.min(this.unread, fromOthers);
         this.chat = this.keepDownloads(history);
         this.lastSeq = history.at(-1)?.seq ?? 0;
+        for (const entry of history) this.fetchPreview(entry);
         this.phase = "in-call";
         this.emit();
         return;
@@ -291,6 +307,7 @@ export class Call {
         if (!entry) return;
         this.chat = this.keepDownloads([...this.chat, entry]);
         this.lastSeq = Math.max(this.lastSeq, entry.seq);
+        this.fetchPreview(entry);
         if (entry.from === this.selfId) {
           const pending = this.pendingChat.find((p) => p.sender === entry.from && entry.seq > p.afterSeq && JSON.stringify(p.body) === JSON.stringify(entry.body));
           if (pending) this.settleChat(pending, true);
@@ -453,11 +470,48 @@ export class Call {
   async setSpeaker(deviceId: string): Promise<void> {
     await this.audio.setSink(deviceId);
     this.speakerId = deviceId;
+    this.speakerChosen = deviceId !== "";
+    this.speakerMoved = false;
     try { localStorage.setItem("streamroom:speaker", deviceId); } catch { /* Storage is optional. */ }
     this.emit();
   }
 
   clearNotice(): void { this.notice = null; this.emit(); }
+
+  private readonly onDeviceChange = () => void this.avoidReplayer();
+
+  /**
+   * FxSound and similar tools replay every app's sound from their own program. A call played
+   * through one reaches friends again twice over: in a system-audio share, and past the mic's echo
+   * canceller, which can't recognize the reshaped sound. So friends hear their own voice. Play the
+   * call straight on the device underneath instead, unless the user picked a device themselves.
+   */
+  private async avoidReplayer(): Promise<void> {
+    if (this.speakerChosen || !canPickSpeaker()) return;
+    const route = speakerBehindReplayer(await navigator.mediaDevices.enumerateDevices().catch(() => []));
+    if (this.speakerChosen || this.phase === "left") return;
+    if (!route) {
+      // The default is a real device again: follow it.
+      if (this.speakerMoved) await this.audio.setSink("").then(() => { this.speakerId = ""; this.speakerMoved = false; this.emit(); }, () => undefined);
+      return;
+    }
+    if (route.deviceId === null) {
+      if (this.replayerNoticed) return;
+      this.replayerNoticed = true;
+      this.notice = `Your sound goes through ${route.replayer}, so your friends hear their own voice. Open the menu next to Mute and pick your headphones under "Call plays on".`;
+      this.emit();
+      return;
+    }
+    if (route.deviceId === this.speakerId) return;
+    const deviceId = route.deviceId;
+    try { await this.audio.setSink(deviceId); } catch { return; }
+    if (this.speakerChosen) return;
+    this.speakerId = deviceId;
+    this.speakerMoved = true;
+    this.replayerNoticed = true;
+    this.notice = `Your sound goes through ${route.replayer}, which makes your friends hear their own voice. The call now plays straight on ${route.label}.`;
+    this.emit();
+  }
 
   async startShare(presetId: PresetId): Promise<void> {
     const stream = await getScreen(PRESETS[presetId]);
@@ -469,6 +523,7 @@ export class Call {
     });
     this.browserAudio = stream.getAudioTracks()[0] ?? null;
     this.noDisplayAudio = !this.browserAudio;
+    this.callInDisplayAudio = capturesCallAudio(stream);
     try { await this.switchShareAudio(this.audioSource); }
     catch { this.audioSource = "browser"; this.notice = "Couldn't open the saved audio source. Choose another source."; }
     if (this.screen !== stream) return;
@@ -517,6 +572,7 @@ export class Call {
     this.browserAudio?.stop();
     this.browserAudio = null;
     this.noDisplayAudio = false;
+    this.callInDisplayAudio = false;
     for (const [link, s] of this.senders) {
       for (const t of s.screen) link.removeTrack(t);
       s.screen = [];
@@ -584,9 +640,13 @@ export class Call {
     return false;
   }
 
-  /** Offer files in the chat. Friends download them straight from this tab while it stays open. */
-  shareFiles(files: readonly File[]): void {
+  /**
+   * Offer files in the chat. Friends download them straight from this tab while it stays open.
+   * Returns the files that are fine but couldn't be sent right now, so the caller can keep them.
+   */
+  shareFiles(files: readonly File[]): File[] {
     const refused: string[] = [];
+    const retry: File[] = [];
     for (const file of files) {
       const id = randomId(12);
       // A type with parameters ("text/plain;charset=utf-8") isn't worth refusing the file over.
@@ -598,13 +658,30 @@ export class Call {
       this.transfers.offer(meta, file);
       if (!this.sendChatBody({ kind: "file", file: meta })) {
         this.transfers.unshare(meta.id);
-        refused.push(`${file.name} was not shared. ${this.notice ?? "Try again."}`);
+        retry.push(file);
       }
     }
+    if (retry.length > 0) refused.push(`${retry.length === 1 ? `${retry[0]!.name} was` : `${retry.length} files were`} not shared yet. ${this.notice ?? "Try again."}`);
     if (refused.length > 0) {
       this.notice = refused.join(" ");
       this.emit();
     }
+    return retry;
+  }
+
+  /** This tab's copy of a file it shared, while it still offers it. */
+  localFile(file: FileId): Blob | null {
+    return this.transfers.offered(file);
+  }
+
+  /** Small pictures load as they arrive so the chat can show them, once per file per tab. */
+  private fetchPreview(entry: ChatEntry): void {
+    if (entry.body.kind !== "file" || this.ownIds.has(entry.from) || !this.remotes.has(entry.from)) return;
+    const { file } = entry.body;
+    const key = downloadKey(entry.from, file.id);
+    if (file.size > PREVIEW_FETCH_BYTES || previewKind(file.mime) !== "image" || this.previewFetched.has(key)) return;
+    this.previewFetched.add(key);
+    this.transfers.download(entry.from, file);
   }
 
   download(entry: ChatEntry): void {

@@ -828,6 +828,29 @@ select.input {
   padding: 0.6rem 0.8rem;
 }
 
+.menu-group {
+  display: grid;
+  gap: 2px;
+}
+
+.menu-group + .menu-group {
+  margin-top: 0.3rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--seam);
+}
+
+.menu-heading {
+  padding: 0.35rem 0.8rem 0.2rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--dust);
+}
+
+.menu {
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+}
+
 /* Stats */
 .stats {
   position: fixed;
@@ -1197,6 +1220,166 @@ select.input {
   width: 42px;
   min-height: 42px;
   padding: 0;
+}
+
+/* Files waiting to be sent sit on a strip of film: sprocket holes along both edges, one frame
+   per file. */
+.tray {
+  --holes: repeating-linear-gradient(90deg, var(--seam) 0 7px, transparent 7px 13px);
+  display: flex;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.95rem 0.8rem 0.85rem;
+  list-style: none;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--seam);
+  background:
+    var(--holes) left 0.8rem top 5px / calc(100% - 1.6rem) 3px no-repeat,
+    var(--holes) left 0.8rem bottom 5px / calc(100% - 1.6rem) 3px no-repeat,
+    var(--ink);
+}
+
+.tray-item {
+  position: relative;
+  flex: none;
+  width: 88px;
+  padding-top: 6px;
+}
+
+.tray-frame {
+  height: 62px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 5px;
+  background: var(--velvet);
+  box-shadow: inset 0 0 0 1px var(--seam);
+}
+
+.tray-frame.has-picture {
+  background: #000;
+}
+
+.tray-frame img,
+.tray-frame video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tray-extension {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  color: var(--tungsten);
+}
+
+.tray-name {
+  margin-top: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--dust);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tray-remove {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--seam);
+  border-radius: 50%;
+  background: var(--ink-raised);
+  color: var(--paper);
+  cursor: pointer;
+}
+
+.tray-remove:hover {
+  border-color: var(--flare);
+  color: var(--flare);
+}
+
+.file-entry {
+  display: grid;
+  justify-items: start;
+}
+
+.file-entry > .file {
+  justify-self: stretch;
+}
+
+.file-preview {
+  display: block;
+  max-width: min(100%, 320px);
+  margin-top: 0.3rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: #000;
+}
+
+button.file-preview {
+  cursor: zoom-in;
+}
+
+.file-preview img,
+.file-preview video {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+}
+
+/* An enlarged picture is projected: the room dims and the frame throws a little warm light. */
+.viewer {
+  max-width: none;
+  max-height: none;
+  width: 100vw;
+  height: 100dvh;
+  margin: 0;
+  padding: 1.5rem 16px;
+  border: 0;
+  background: transparent;
+  color: var(--paper);
+  cursor: zoom-out;
+}
+
+.viewer[open] {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0.6rem;
+}
+
+.viewer::backdrop {
+  background: rgb(21 19 42 / 0.93);
+}
+
+.viewer img {
+  max-width: 100%;
+  max-height: calc(100dvh - 7rem);
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 1px rgb(244 184 96 / 0.25), 0 0 90px rgb(244 184 96 / 0.16);
+}
+
+.viewer-caption {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  font-size: 0.9375rem;
+  cursor: auto;
+}
+
+.viewer-caption > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A file is a ticket stub: notched sides, a perforation before its actions, and progress that

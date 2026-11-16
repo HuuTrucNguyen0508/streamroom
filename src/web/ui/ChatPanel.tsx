@@ -1,9 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { MAX_CHAT_TEXT, type ChatEntry, type FileMeta, type MemberId } from "../../shared/protocol.ts";
 import type { Call, CallView } from "../rtc/call.ts";
+import { previewKind } from "../rtc/files.ts";
 import { downloadKey, type IncomingView, type SendView } from "../rtc/transfers.ts";
 import { initials } from "./hooks.ts";
 import { AttachIcon, CloseIcon, DownloadIcon, SendIcon } from "./icons.tsx";
+import { usePreviewUrl } from "./preview.ts";
+
+/** A file picked, pasted or dropped, waiting in the composer until Send. */
+export interface Staged {
+  key: number;
+  file: File;
+}
 
 /** Consecutive messages from one person within this window share a header. */
 const GROUP_MS = 5 * 60_000;
@@ -38,9 +46,11 @@ function clip(text: string, max: number): string {
   return chars.length > max ? `${chars.slice(0, max).join("")}…` : text;
 }
 
-export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, setDraft, sending, send }: {
+export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, setDraft, staged, stage, unstage, sending, send }: {
   call: Call; view: CallView; onClose: () => void; focusInput: boolean; menuOpen: boolean;
-  draft: string; setDraft: (text: string) => void; sending: boolean; send: () => void;
+  draft: string; setDraft: (text: string) => void;
+  staged: Staged[]; stage: (files: readonly File[]) => void; unstage: (key: number) => void;
+  sending: boolean; send: () => void;
 }) {
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 900px)").matches);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -49,6 +59,7 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pinned = useRef(true);
+  const [viewing, setViewing] = useState<{ url: string; name: string } | null>(null);
   const groups = groupsOf(view.chat);
   const last = view.chat.at(-1);
   const announcement = last && !view.ownIds.has(last.from) ? `${last.name}: ${last.body.kind === "text" ? clip(last.body.text, ANNOUNCE_CHARS) : "shared a file"}` : "";
@@ -97,11 +108,11 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
   }, [view.chat]);
 
   // Effects run after paint, so a listener closed over props would miss a menu that just closed.
-  const latest = useRef({ onClose, menuOpen });
-  latest.current = { onClose, menuOpen };
+  const latest = useRef({ onClose, menuOpen, viewing });
+  latest.current = { onClose, menuOpen, viewing };
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.isComposing || e.keyCode === 229 || e.defaultPrevented || latest.current.menuOpen) return;
+      if (e.key !== "Escape" || e.isComposing || e.keyCode === 229 || e.defaultPrevented || latest.current.menuOpen || latest.current.viewing) return;
       e.preventDefault();
       latest.current.onClose();
     };
@@ -137,7 +148,7 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
         }}
       >
         <p class="chat-lifetime">Messages stay while anyone is in the room. Files go straight from the sender's browser and are never uploaded.</p>
-        {groups.length === 0 && <p class="chat-empty">Nothing here yet. Say hello, or drop a file anywhere on the call to share it.</p>}
+        {groups.length === 0 && <p class="chat-empty">Nothing here yet. Say hello, or drop or paste a file anywhere on the call to share it.</p>}
         {groups.map((g) => {
           const own = view.ownIds.has(g.from);
           return (
@@ -155,7 +166,7 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
                       {e.body.text}
                     </p>
                   ) : (
-                    <FileCard key={e.seq} call={call} view={view} entry={e} file={e.body.file} own={own} />
+                    <FileCard key={e.seq} call={call} view={view} entry={e} file={e.body.file} own={own} onView={setViewing} />
                   ),
                 )}
               </div>
@@ -163,6 +174,14 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
           );
         })}
       </div>
+
+      {staged.length > 0 && (
+        <ul class="tray" aria-label="Files to send" data-testid="chat-tray">
+          {staged.map((s) => (
+            <StagedTile key={s.key} file={s.file} onRemove={() => { unstage(s.key); inputRef.current?.focus(); }} />
+          ))}
+        </ul>
+      )}
 
       <form
         class="chat-compose"
@@ -180,10 +199,11 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
           onChange={(e) => {
             const files = [...(e.currentTarget.files ?? [])];
             e.currentTarget.value = "";
-            if (files.length > 0) call.shareFiles(files);
+            if (files.length > 0) stage(files);
+            inputRef.current?.focus();
           }}
         />
-        <button type="button" class="btn btn-ghost chat-attach" aria-label="Share files" title="Share files" onClick={() => fileRef.current?.click()}>
+        <button type="button" class="btn btn-ghost chat-attach" aria-label="Add files" title="Add files" onClick={() => fileRef.current?.click()}>
           <AttachIcon />
         </button>
         <label class="chat-field">
@@ -193,7 +213,7 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
             class="chat-input"
             rows={1}
             maxLength={MAX_CHAT_TEXT}
-            placeholder="Message the room"
+            placeholder={staged.length > 0 ? "Add a message" : "Message the room"}
             data-testid="chat-input"
             value={draft}
             onInput={(e) => setDraft(e.currentTarget.value)}
@@ -205,11 +225,65 @@ export function ChatPanel({ call, view, onClose, focusInput, menuOpen, draft, se
             }}
           />
         </label>
-        <button class="btn btn-primary chat-send" aria-label="Send" disabled={sending || draft.trim() === ""} data-testid="chat-send">
+        <button class="btn btn-primary chat-send" aria-label="Send" disabled={sending || (draft.trim() === "" && staged.length === 0)} data-testid="chat-send">
           <SendIcon />
         </button>
       </form>
+      {viewing && <Viewer {...viewing} onClose={() => setViewing(null)} />}
     </div>
+  );
+}
+
+function StagedTile({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const kind = previewKind(file.type);
+  const { url, failed } = usePreviewUrl(file, file.type);
+  const dot = file.name.lastIndexOf(".");
+  const extension = dot > 0 ? file.name.slice(dot, dot + 6) : "file";
+  return (
+    <li class="tray-item" data-testid="chat-staged" data-name={file.name} title={`${file.name}, ${bytes(file.size)}`}>
+      <div class={`tray-frame${url ? " has-picture" : ""}`}>
+        {url && kind === "image" && <img src={url} alt="" onError={failed} />}
+        {url && kind === "video" && <video src={url} muted preload="metadata" onError={failed} />}
+        {!url && <span class="tray-extension">{extension}</span>}
+      </div>
+      <p class="tray-name">{file.name}</p>
+      <button type="button" class="tray-remove" aria-label={`Remove ${file.name}`} onClick={onRemove}>
+        <CloseIcon width={14} height={14} />
+      </button>
+    </li>
+  );
+}
+
+/** A picture blown up over the call. Escape, a click anywhere, or the close button puts it away. */
+function Viewer({ url, name, onClose }: { url: string; name: string; onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    const opener = document.activeElement;
+    dialog.showModal();
+    return () => {
+      dialog.close();
+      if (opener instanceof HTMLElement) opener.focus();
+    };
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      class="viewer"
+      aria-label={name}
+      data-testid="file-viewer"
+      onClick={onClose}
+      onCancel={(e) => { e.preventDefault(); onClose(); }}
+    >
+      <img src={url} alt={name} />
+      <p class="viewer-caption">
+        <span>{name}</span>
+        <button type="button" class="btn btn-ghost btn-sm" aria-label="Close picture" onClick={onClose}>
+          <CloseIcon width={18} height={18} />
+        </button>
+      </p>
+    </dialog>
   );
 }
 
@@ -233,8 +307,13 @@ function cardState(view: CallView, entry: ChatEntry, file: FileMeta, own: boolea
   return view.members.some((m) => m.id === entry.from) ? { kind: "available" } : { kind: "unavailable" };
 }
 
-function FileCard({ call, view, entry, file, own }: { call: Call; view: CallView; entry: ChatEntry; file: FileMeta; own: boolean }) {
+function FileCard({ call, view, entry, file, own, onView }: {
+  call: Call; view: CallView; entry: ChatEntry; file: FileMeta; own: boolean; onView: (picture: { url: string; name: string }) => void;
+}) {
   const state = cardState(view, entry, file, own);
+  const kind = previewKind(file.mime);
+  const local = state.kind === "offer" ? call.localFile(file.id) : state.kind === "incoming" && state.phase === "done" ? state.blob : null;
+  const { url, failed } = usePreviewUrl(local, file.mime);
   const sender = entry.name;
   const dot = file.name.lastIndexOf(".");
   const extension = dot > 0 ? file.name.slice(dot) : "";
@@ -336,7 +415,20 @@ function FileCard({ call, view, entry, file, own }: { call: Call; view: CallView
       break;
   }
 
+  const preview =
+    url && kind === "image" ? (
+      <button type="button" class="file-preview" aria-label={`View ${file.name}`} data-testid="file-preview" onClick={() => onView({ url, name: file.name })}>
+        <img src={url} alt="" onError={failed} />
+      </button>
+    ) : url && kind === "video" ? (
+      <div class="file-preview">
+        <video src={url} controls preload="metadata" aria-label={file.name} data-testid="file-preview" onError={failed} />
+      </div>
+    ) : null;
+
   return (
+    <div class="file-entry">
+    {preview}
     <article
       class={`file is-${stateName}`}
       style={{ "--progress": progress.toFixed(4) }}
@@ -359,6 +451,7 @@ function FileCard({ call, view, entry, file, own }: { call: Call; view: CallView
       </div>
       {actions && <div class="file-actions">{actions}</div>}
     </article>
+    </div>
   );
 }
 

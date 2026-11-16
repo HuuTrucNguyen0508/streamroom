@@ -27,14 +27,22 @@ it("confirms text only on echo and leaves rejected text available to the compose
   signal.events!.message({t:"chat",entry:{seq:1,from:member,name:"Sender",at:1,body:{kind:"text",text:"hello"}}});
   expect(await accepted).toBe(true);
 });
-it("removes a rate-limited offer and reports every file refused after a partial batch", () => {
+it("removes a rate-limited offer, and hands back every file refused after a partial batch", () => {
   const call = setup();
   call.shareFiles([new File(["hello"],"hello.txt")]);
   signal.events!.message({t:"error",code:"slow_down",message:"slow"});
   expect(call.view.transfers.offered.size).toBe(0);
-  call.shareFiles(Array.from({length:12}, (_,i) => new File(["hello"],`f${i}.txt`)));
-  expect(call.view.notice).toContain("f8.txt was not shared");
-  expect(call.view.notice).toContain("f11.txt was not shared");
+  const files = Array.from({length:12}, (_,i) => new File(["hello"],`f${i}.txt`));
+  const kept = call.shareFiles(files);
+  expect(kept.map((f) => f.name)).toEqual(["f8.txt", "f9.txt", "f10.txt", "f11.txt"]);
+  expect(call.view.transfers.offered.size).toBe(8);
+  expect(call.view.notice).toContain("4 files were not shared yet");
+});
+it("keeps a file it can't send at all out of the retry list", () => {
+  const call = setup();
+  const kept = call.shareFiles([new File([], "empty.txt")]);
+  expect(kept).toEqual([]);
+  expect(call.view.notice).toContain("empty.txt is empty.");
 });
 it("reports messages with no visible content", async () => {
   const call = setup();
