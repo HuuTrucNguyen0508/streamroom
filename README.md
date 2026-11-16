@@ -4,6 +4,18 @@ A temporary room for screen sharing and voice. The host picks the number of seat
 
 ## Quick start
 
+### On your own computer
+
+To try Streamroom or call friends on your Tailscale network, run it with Bun. You don't need Docker or a domain:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+pnpm start
+```
+
+Open http://localhost:8080. The [local guide](docs/local.md) covers the host passphrase, calling friends over HTTPS, and the limits of this setup.
+
 ### Cloudflare
 
 Host the app without leaving your PC running. Use a free Cloudflare account, Workers Static Assets, Durable Objects, and Realtime TURN:
@@ -30,7 +42,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Open http://localhost:8080. Copy the room's invite link to invite friends. If that port is busy, set `PORT` in `.env`, then use that port in the URL. This machine uses 8088 locally. Stop the stack with `docker compose down`.
+Open http://localhost:8080. Copy the room's invite link to invite friends. If that port is busy, set `PORT` in `.env`, then use that port in the URL. Stop the stack with `docker compose down`.
 
 ## Invite friends over HTTPS
 
@@ -112,7 +124,7 @@ E2E_BASE_URL=http://localhost:8080 pnpm test:e2e
 E2E_BASE_URL=http://localhost:8080 pnpm test:e2e:screenshots
 ```
 
-Use 8088 here if using this machine's `.env`. Tests use fake media, real peer connections, and real coturn, including a forced relay call. Screenshots go to `docs/screenshots/`. They do not open a visible browser.
+If you changed `PORT`, use that port in `E2E_BASE_URL`. Tests use fake media, real peer connections, and real coturn, including a forced relay call. Screenshots go to `docs/screenshots/`. They do not open a visible browser.
 
 CI runs the frozen install, Bun/web/Worker typechecks, unit tests, production build, Wrangler deployment dry-run, and Docker build. End-to-end tests stay local because the host-network TURN path has not been validated on GitHub's Ubuntu runners. Configure the `check` job as a required branch-protection check when publishing the repository.
 
