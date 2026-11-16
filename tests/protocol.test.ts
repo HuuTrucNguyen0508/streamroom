@@ -12,6 +12,7 @@ import {
   parseClientMessage,
   parseFileMeta,
   parseSeats,
+  roomIdFromInvite,
 } from "../src/shared/protocol.ts";
 
 const state = { muted: false, hasMic: true, share: null };
@@ -32,6 +33,18 @@ describe("room ids", () => {
     expect(new Set(Array.from({ length: 1000 }, newRoomId)).size).toBe(1000);
     expect(isRoomId("short")).toBe(false);
     expect(isRoomId(`${room}/`)).toBe(false);
+  });
+});
+
+describe("roomIdFromInvite", () => {
+  it("reads a pasted room code or invite link", () => {
+    for (const text of [room, `  ${room}\n`, `/r/${room}`, `r/${room}/`, `https://streamroom.example/r/${room}?relay=1#x`, `Join us: https://streamroom.example/r/${room} tonight`]) {
+      expect(roomIdFromInvite(text)).toBe(room);
+    }
+  });
+
+  it("rejects text without a room code", () => {
+    for (const text of ["", "short", "https://streamroom.example/", `https://streamroom.example/r/${room}x`]) expect(roomIdFromInvite(text)).toBeNull();
   });
 });
 

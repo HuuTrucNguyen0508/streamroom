@@ -264,6 +264,27 @@ textarea {
   border: 1px solid var(--seam);
 }
 
+.lobby-side {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.lobby-join {
+  padding: 1.25rem 1.75rem;
+  background: transparent;
+}
+
+.join-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.join-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
 .field {
   display: grid;
   gap: 0.4rem;

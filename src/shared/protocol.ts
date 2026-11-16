@@ -44,6 +44,13 @@ export function isRoomId(value: unknown): value is RoomId {
   return typeof value === "string" && ROOM_ID_RE.test(value);
 }
 
+/** The room in a pasted invite: a bare room code, or any link with /r/<code> in it. */
+export function roomIdFromInvite(text: string): RoomId | null {
+  const trimmed = text.trim();
+  const code = /(?:^|\/)r\/([^/?#\s]+)/.exec(trimmed)?.[1] ?? trimmed;
+  return isRoomId(code) ? code : null;
+}
+
 export function isMemberId(value: unknown): value is MemberId {
   return typeof value === "string" && MEMBER_ID_RE.test(value);
 }
