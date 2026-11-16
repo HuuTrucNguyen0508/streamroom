@@ -60,7 +60,39 @@ const card = (f: Friend, name: string): Locator => f.page.locator(`[data-testid=
 async function share(f: Friend, path: string): Promise<void> {
   await openChat(f);
   await f.page.getByTestId("chat-file-input").setInputFiles(path);
+  await expect(f.page.getByTestId("chat-staged")).toHaveCount(1);
+  await f.page.getByTestId("chat-send").click();
+  await expect(f.page.getByTestId("chat-tray")).toHaveCount(0);
 }
+
+/** A real PNG drawn by the browser, so previews have something to decode. */
+async function png(f: Friend, width: number, height: number): Promise<Buffer> {
+  const b64 = await f.page.evaluate(async ([w, h]) => {
+    const canvas = new OffscreenCanvas(w!, h!);
+    const g = canvas.getContext("2d")!;
+    g.fillStyle = "#f4b860";
+    g.fillRect(0, 0, w!, h!);
+    g.fillStyle = "#221e3b";
+    g.fillRect(w! / 4, h! / 4, w! / 2, h! / 2);
+    const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer());
+    return btoa(Array.from(bytes, (b) => String.fromCharCode(b)).join(""));
+  }, [width, height]);
+  return Buffer.from(b64, "base64");
+}
+
+/** Fires a paste carrying `files` (and optional text types) at `selector`, as the clipboard would. */
+async function paste(f: Friend, selector: string, files: { name: string; type: string; b64: string }[], text?: { plain: string; html: string }): Promise<boolean> {
+  return f.page.evaluate(([sel, list, t]) => {
+    const dt = new DataTransfer();
+    for (const file of list) dt.items.add(new File([Uint8Array.from(atob(file.b64), (c) => c.charCodeAt(0))], file.name, { type: file.type }));
+    if (t) { dt.setData("text/plain", t.plain); dt.setData("text/html", t.html); }
+    const event = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+    document.querySelector(sel)!.dispatchEvent(event);
+    return event.defaultPrevented;
+  }, [selector, files, text] as const);
+}
+
+const naturalWidth = (l: Locator) => l.evaluate((el) => (el as HTMLImageElement).naturalWidth);
 
 async function randomFile(path: string, bytes: number): Promise<string> {
   const data = randomBytes(bytes);
@@ -253,6 +285,75 @@ test("files: cancel stops a download, and a sender leaving fails one in progress
   await expect(card(ben, "archive.bin")).toHaveAttribute("data-state", "failed");
   await expect(card(ben, "archive.bin")).toContainText("Ada left before the file finished.");
   await expect(card(ben, "archive.bin").getByRole("button")).toHaveCount(0);
+
+  for (const f of [ada, ben]) await f.context.close();
+});
+
+test("files: staged files preview before sending, pastes stage, and small pictures show inline for everyone", async ({ browser, baseURL }, testInfo) => {
+  const ada = await open(browser, "Ada");
+  const ben = await open(browser, "Ben");
+  const room = await createRoom(ada, baseURL!);
+  await join(ada, room);
+  await join(ben, room);
+  const poster = await png(ada, 320, 180);
+
+  // Picked files wait in the tray, with a picture for images, until Send.
+  await openChat(ada);
+  await ada.page.getByTestId("chat-file-input").setInputFiles([{ name: "poster.png", mimeType: "image/png", buffer: poster }, { name: "notes.bin", mimeType: "application/octet-stream", buffer: randomBytes(20_000) }]);
+  const staged = ada.page.getByTestId("chat-staged");
+  await expect(staged).toHaveCount(2);
+  await expect.poll(() => naturalWidth(staged.first().locator("img"))).toBe(320);
+  await expect(staged.nth(1)).toContainText(".bin");
+  await expect(ada.page.getByTestId("file-card")).toHaveCount(0);
+  await ada.page.getByRole("button", { name: "Remove notes.bin" }).click();
+  await expect(staged).toHaveCount(1);
+  await expect(ada.page.getByTestId("chat-send")).toBeEnabled();
+
+  // A caption and the picture go together; the caption lands first.
+  await ada.page.getByTestId("chat-input").fill("Poster for tonight");
+  await ada.page.getByTestId("chat-input").press("Enter");
+  await expect(ada.page.getByTestId("chat-tray")).toHaveCount(0);
+  await expect.poll(() => naturalWidth(ada.page.getByTestId("file-preview").locator("img"))).toBe(320);
+  await openChat(ben);
+  await expect(messages(ben)).toHaveText(["Poster for tonight"]);
+  const order = await ben.page.getByTestId("chat-log").evaluate((log) => [...log.querySelectorAll('[data-testid="chat-message"], [data-testid="file-card"]')].map((el) => el.getAttribute("data-testid")));
+  expect(order).toEqual(["chat-message", "file-card"]);
+
+  // Ben's tab fetches the small picture by itself and shows it.
+  await expect(card(ben, "poster.png")).toHaveAttribute("data-state", "done");
+  await expect.poll(() => naturalWidth(ben.page.getByTestId("file-preview").locator("img"))).toBe(320);
+  await ben.page.getByRole("button", { name: "View poster.png" }).click();
+  await expect(ben.page.getByTestId("file-viewer")).toBeVisible();
+  await ben.page.keyboard.press("Escape");
+  await expect(ben.page.getByTestId("file-viewer")).toHaveCount(0);
+  await expect(ben.page.getByTestId("chat-panel")).toBeVisible();
+
+  // A screenshot pasted into the message box is staged under a readable name, not sent.
+  const shot = { name: "image.png", type: "image/png", b64: (await png(ben, 64, 64)).toString("base64") };
+  expect(await paste(ben, '[data-testid="chat-input"]', [shot])).toBe(true);
+  await expect(ben.page.getByTestId("chat-staged")).toHaveAttribute("data-name", /^Pasted image \d\d\.\d\d\.\d\d\.png$/);
+  await expect(card(ada, "poster.png")).toHaveCount(1);
+  await expect(ada.page.getByTestId("file-card")).toHaveCount(1);
+  // A spreadsheet copy carries text, HTML and a picture of the cells: that's a text paste.
+  expect(await paste(ben, '[data-testid="chat-input"]', [shot], { plain: "a\tb", html: "<table></table>" })).toBe(false);
+  await expect(ben.page.getByTestId("chat-staged")).toHaveCount(1);
+
+  // Pasting with the chat closed opens it with the file staged.
+  await ben.page.getByRole("button", { name: "Close chat" }).click();
+  await expect(ben.page.getByTestId("chat-panel")).toHaveCount(0);
+  expect(await paste(ben, "body", [{ ...shot, name: "frame.png" }])).toBe(true);
+  await expect(ben.page.getByTestId("chat-panel")).toBeVisible();
+  await expect(ben.page.getByTestId("chat-staged")).toHaveCount(2);
+  await expect(ben.page.getByTestId("chat-input")).toBeFocused();
+
+  // A file named like a picture that isn't one gets a plain card, not a broken image.
+  await ben.page.getByTestId("chat-send").click();
+  await expect(card(ada, "frame.png")).toHaveAttribute("data-state", "done");
+  const fake = testInfo.outputPath("fake.png");
+  await randomFile(fake, 4_000);
+  await share(ada, fake);
+  await expect(card(ben, "fake.png")).toHaveAttribute("data-state", "done");
+  await expect(ben.page.getByTestId("file-preview")).toHaveCount(3);
 
   for (const f of [ada, ben]) await f.context.close();
 });

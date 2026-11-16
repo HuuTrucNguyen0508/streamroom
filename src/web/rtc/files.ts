@@ -83,6 +83,20 @@ export async function hashFile(file: Blob, signal?: AbortSignal, onRead?: () => 
   return bytesToHex(hasher.digest());
 }
 
+/** Only types a media element decodes are previewed; the rest stay tickets you download and save. */
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"]);
+const VIDEO_TYPES = new Set(["video/mp4", "video/webm", "video/ogg"]);
+
+export type PreviewKind = "image" | "video";
+
+export function previewKind(mime: string): PreviewKind | null {
+  const type = mime.split(";")[0]!.trim().toLowerCase();
+  return IMAGE_TYPES.has(type) ? "image" : VIDEO_TYPES.has(type) ? "video" : null;
+}
+
+/** Pictures up to this size download on arrival so the chat can show them. */
+export const PREVIEW_FETCH_BYTES = 8 * 1024 ** 2;
+
 export type FailReason = SendFailure | "size" | "mismatch" | "memory";
 
 export type IncomingPhase =

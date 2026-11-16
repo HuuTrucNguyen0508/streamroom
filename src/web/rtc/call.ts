@@ -24,6 +24,7 @@ import { PeerLink } from "./peer.ts";
 import { AUDIO_MAX_BITRATE, PRESETS } from "./presets.ts";
 import { Signaling } from "./signaling.ts";
 import { StatsSampler, type MediaLabel, type PeerStats } from "./stats.ts";
+import { PREVIEW_FETCH_BYTES, previewKind } from "./files.ts";
 import { FileTransfers, downloadKey, type TransfersView } from "./transfers.ts";
 
 export type Phase = "idle" | "connecting" | "in-call" | "reconnecting" | "full" | "locked" | "left";
@@ -123,6 +124,7 @@ export class Call {
   private readonly ownIds = new Set<MemberId>();
   /** Mirrors the server's chat limit so a refused message stays in the composer. */
   private readonly chatBucket = new TokenBucket(9, 1100);
+  private readonly previewFetched = new Set<string>();
   private readonly transfers = new FileTransfers({
     open: (member, label) => this.remotes.get(member)?.link?.openChannel(label) ?? null,
     maxMessageSize: (member) => this.remotes.get(member)?.link?.maxMessageSize ?? 0,
@@ -262,6 +264,7 @@ export class Call {
         this.unread = this.chatOpen ? 0 : this.chat.length === 0 ? fromOthers : Math.min(this.unread, fromOthers);
         this.chat = this.keepDownloads(history);
         this.lastSeq = history.at(-1)?.seq ?? 0;
+        for (const entry of history) this.fetchPreview(entry);
         this.phase = "in-call";
         this.emit();
         return;
@@ -295,6 +298,7 @@ export class Call {
         if (!entry) return;
         this.chat = this.keepDownloads([...this.chat, entry]);
         this.lastSeq = Math.max(this.lastSeq, entry.seq);
+        this.fetchPreview(entry);
         if (entry.from === this.selfId) {
           const pending = this.pendingChat.find((p) => p.sender === entry.from && entry.seq > p.afterSeq && JSON.stringify(p.body) === JSON.stringify(entry.body));
           if (pending) this.settleChat(pending, true);
@@ -590,9 +594,13 @@ export class Call {
     return false;
   }
 
-  /** Offer files in the chat. Friends download them straight from this tab while it stays open. */
-  shareFiles(files: readonly File[]): void {
+  /**
+   * Offer files in the chat. Friends download them straight from this tab while it stays open.
+   * Returns the files that are fine but couldn't be sent right now, so the caller can keep them.
+   */
+  shareFiles(files: readonly File[]): File[] {
     const refused: string[] = [];
+    const retry: File[] = [];
     for (const file of files) {
       const id = randomId(12);
       // A type with parameters ("text/plain;charset=utf-8") isn't worth refusing the file over.
@@ -604,13 +612,30 @@ export class Call {
       this.transfers.offer(meta, file);
       if (!this.sendChatBody({ kind: "file", file: meta })) {
         this.transfers.unshare(meta.id);
-        refused.push(`${file.name} was not shared. ${this.notice ?? "Try again."}`);
+        retry.push(file);
       }
     }
+    if (retry.length > 0) refused.push(`${retry.length === 1 ? `${retry[0]!.name} was` : `${retry.length} files were`} not shared yet. ${this.notice ?? "Try again."}`);
     if (refused.length > 0) {
       this.notice = refused.join(" ");
       this.emit();
     }
+    return retry;
+  }
+
+  /** This tab's copy of a file it shared, while it still offers it. */
+  localFile(file: FileId): Blob | null {
+    return this.transfers.offered(file);
+  }
+
+  /** Small pictures load as they arrive so the chat can show them, once per file per tab. */
+  private fetchPreview(entry: ChatEntry): void {
+    if (entry.body.kind !== "file" || this.ownIds.has(entry.from) || !this.remotes.has(entry.from)) return;
+    const { file } = entry.body;
+    const key = downloadKey(entry.from, file.id);
+    if (file.size > PREVIEW_FETCH_BYTES || previewKind(file.mime) !== "image" || this.previewFetched.has(key)) return;
+    this.previewFetched.add(key);
+    this.transfers.download(entry.from, file);
   }
 
   download(entry: ChatEntry): void {

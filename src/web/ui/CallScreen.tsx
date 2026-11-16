@@ -3,7 +3,7 @@ import { PRESET_IDS, type MemberId, type PresetId } from "../../shared/protocol.
 import type { Call, CallView } from "../rtc/call.ts";
 import { canPickSpeaker, listMics, listSpeakers, replayerName } from "../rtc/media.ts";
 import { PRESETS } from "../rtc/presets.ts";
-import { ChatPanel } from "./ChatPanel.tsx";
+import { ChatPanel, type Staged } from "./ChatPanel.tsx";
 import { initials, useLevel } from "./hooks.ts";
 import {
   ChatIcon,
@@ -19,7 +19,10 @@ import {
   StopScreenIcon,
   UnlockIcon,
 } from "./icons.tsx";
+import { pastedFiles } from "./preview.ts";
 import { StatsPanel } from "./StatsPanel.tsx";
+
+let nextStagedKey = 1;
 
 interface Share {
   id: MemberId | "self";
@@ -48,15 +51,25 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const sendInFlight = useRef(false);
+  const [staged, setStaged] = useState<Staged[]>([]);
+  const stageFiles = (files: readonly File[]) => setStaged((now) => [...now, ...files.map((file) => ({ key: nextStagedKey++, file }))]);
   const sendChat = async () => {
     if (sendInFlight.current) return;
     const text = draft;
+    const files = staged;
+    // Text goes first so a caption lands above the files it introduces.
+    const textSent = text.trim() === "" ? null : call.sendChat(text);
+    if (files.length > 0) {
+      const kept = new Set(call.shareFiles(files.map((s) => s.file)));
+      setStaged((now) => [...files.filter((s) => kept.has(s.file)), ...now.filter((s) => !files.includes(s))]);
+    }
+    if (!textSent) return;
     sendInFlight.current = true;
     setSending(true);
     setDraft("");
     let sent = false;
     try {
-      sent = await call.sendChat(text);
+      sent = await textSent;
     } catch (err) {
       console.warn(err);
     }
@@ -114,6 +127,23 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [call, view.self.hasMic, view.self.muted]);
 
+  // Pasting files anywhere on the call stages them in the chat, except into another text field.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target;
+      const field = t instanceof HTMLInputElement || (t instanceof HTMLTextAreaElement && !t.classList.contains("chat-input")) || (t instanceof HTMLElement && t.isContentEditable);
+      if (field) return;
+      const files = pastedFiles(e.clipboardData);
+      if (!files) return;
+      e.preventDefault();
+      stageFiles(files);
+      focusChatInput.current = true;
+      setChatOpen(true);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
+
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 2200);
@@ -157,8 +187,8 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         setDropping(false);
         const files = [...e.dataTransfer.files];
         if (files.length === 0) return;
-        call.shareFiles(files);
-        focusChatInput.current = false;
+        stageFiles(files);
+        focusChatInput.current = true;
         setChatOpen(true);
       }}
     >
@@ -342,10 +372,10 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
         </div>
       </footer>
 
-      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} menuOpen={menu !== null} draft={draft} setDraft={setDraft} sending={sending} send={sendChat} />}
+      {chatOpen && <ChatPanel call={call} view={view} onClose={closeChat} focusInput={focusChatInput.current} menuOpen={menu !== null} draft={draft} setDraft={setDraft} staged={staged} stage={stageFiles} unstage={(key) => setStaged((now) => now.filter((s) => s.key !== key))} sending={sending} send={sendChat} />}
       {dropping && (
         <div class="drop-veil" aria-hidden="true">
-          <p>Drop to share with the room</p>
+          <p>Drop to add to the chat</p>
         </div>
       )}
       {showStats && <StatsPanel call={call} onClose={() => setShowStats(false)} />}

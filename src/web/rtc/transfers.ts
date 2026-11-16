@@ -246,6 +246,11 @@ export class FileTransfers {
   // ---------------------------------------------------------------------------
   // Sending
 
+  /** The sender's own copy of a file it still offers. */
+  offered(file: FileId): Blob | null {
+    return this.offers.get(file)?.file ?? null;
+  }
+
   offer(meta: FileMeta, file: Blob): void {
     this.offers.set(meta.id, { meta, file, digest: null, hashing: null });
     this.links.changed();
