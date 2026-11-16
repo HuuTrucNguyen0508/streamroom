@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { DEFAULT_SEATS, MAX_SEATS, MIN_SEATS, isRoomId, parseSeats, type RoomId } from "../../shared/protocol.ts";
+import { DEFAULT_SEATS, MAX_SEATS, MIN_SEATS, isRoomId, parseSeats, roomIdFromInvite, type RoomId } from "../../shared/protocol.ts";
 import { Call } from "../rtc/call.ts";
 import { CallScreen } from "./CallScreen.tsx";
 import { useCallView } from "./hooks.ts";
@@ -137,7 +137,8 @@ function HostGate() {
   return <main class="lobby" data-screen="host">
     <section class="lobby-intro"><p class="wordmark">Streamroom</p><h1 class="lobby-title">Settle in.</h1>
       <div class="seat-row" aria-hidden="true">{Array.from({ length: seats }, (_, i) => <span key={i} class="seat-dot" />)}</div>
-      <p class="lobby-lede">{needsPassphrase ? "Enter the host passphrase to start a room. Joining friends? Open their invite link instead." : "Choose how many seats, then send the link to your friends."}</p></section>
+      <p class="lobby-lede">{needsPassphrase ? "Enter the host passphrase to start a room. Joining friends? Paste their room code below." : "Choose how many seats, then send the link to your friends."}</p></section>
+    <div class="lobby-side">
     <form class="lobby-panel" onSubmit={(e) => { e.preventDefault(); void enter(); }}>
       {needsPassphrase && <label class="field"><span class="field-label">Host passphrase</span><input class="input" type="password" autocomplete="current-password" required value={passphrase} onInput={(e) => setPassphrase(e.currentTarget.value)} /></label>}
       <div class="field">
@@ -155,5 +156,28 @@ function HostGate() {
       </p>
       <button class="btn btn-primary btn-lg" disabled={busy || host === null || (needsPassphrase && !passphrase)}>{busy ? "Opening room…" : "Start a room"}</button>
     </form>
+    <JoinByCode />
+    </div>
   </main>;
+}
+
+/** Joining from somewhere that opens this page instead of the invite, like a desktop app's tab. */
+function JoinByCode() {
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  const join = () => {
+    const room = roomIdFromInvite(text);
+    if (!room) { setError("That isn't a room code. Paste the part after /r/ in the invite link, or the whole link."); return; }
+    location.assign(`/r/${room}${location.search}`);
+  };
+  return <form class="lobby-panel lobby-join" onSubmit={(e) => { e.preventDefault(); join(); }}>
+    <div class="field"><label class="field-label" for="join-room">Join a friend's room</label>
+      <div class="join-row">
+        <input class="input" id="join-room" name="room" autocomplete="off" spellcheck={false} placeholder="Room code or link" aria-describedby={error ? "join-error" : undefined} aria-invalid={error ? true : undefined}
+          value={text} onInput={(e) => { setText(e.currentTarget.value); setError(""); }} />
+        <button class="btn" disabled={text.trim() === ""}>Join room</button>
+      </div>
+    </div>
+    {error && <p class="field-error" id="join-error" role="alert">{error}</p>}
+  </form>;
 }
