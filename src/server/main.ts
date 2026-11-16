@@ -44,7 +44,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   "X-Frame-Options": "DENY",
   "Permissions-Policy": "microphone=(self), display-capture=(self), fullscreen=(self)",
   "Content-Security-Policy":
-    "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'",
 };
 
 const MIME: Record<string, string> = {
@@ -57,6 +57,7 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
   ".woff": "font/woff",
   ".json": "application/json",
+  ".wasm": "application/wasm",
   ".webmanifest": "application/manifest+json",
 };
 
