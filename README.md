@@ -166,3 +166,7 @@ Setup is idempotent and doesn't change the default sink. Teardown checks recorde
 On Windows, share **Entire screen** and tick **Also share system audio**. For a browser tab on any supported OS, tick **Also share tab audio**. On macOS Chrome 141 or later, tick system audio when available. A missing or disconnected input produces an error so you can choose another source.
 
 For authenticated headless testing on an isolated Bun or Wrangler port, set the same throwaway `HOST_PASSPHRASE` on the server and `E2E_HOST_PASSPHRASE` on Playwright. `e2e/host-audio.spec.ts` covers login, the seat picker and room-size limits, invite-first joining, HTTP/WS/ICE rejection and screen-audio switching. Existing three-friend and Cloudflare tests also accept that test environment variable. Keep `.dev.vars` ignored and remove it after local testing.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
