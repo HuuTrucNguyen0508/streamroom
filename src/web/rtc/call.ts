@@ -19,7 +19,7 @@ import {
   type ServerMessage,
 } from "../../shared/protocol.ts";
 import { AudioEngine, type Meter } from "./audio.ts";
-import { getMic, getScreen, micConstraints } from "./media.ts";
+import { capturesCallAudio, getMic, getScreen, micConstraints } from "./media.ts";
 import { PeerLink } from "./peer.ts";
 import { AUDIO_MAX_BITRATE, PRESETS } from "./presets.ts";
 import { Signaling } from "./signaling.ts";
@@ -52,6 +52,8 @@ export interface CallView {
   localScreen: MediaStream | null;
   audioSource: string;
   noDisplayAudio: boolean;
+  /** The share's system audio would carry the call back to friends (see capturesCallAudio). */
+  callInDisplayAudio: boolean;
   members: RemoteView[];
   relayOnly: boolean;
   notice: string | null;
@@ -102,6 +104,7 @@ export class Call {
   private audioSource = savedAudioSource();
   private speakerId = "";
   private noDisplayAudio = false;
+  private callInDisplayAudio = false;
   private audioRevision = 0;
   private state: MemberState = { muted: false, hasMic: false, share: null };
   private micDeviceId: string | null = null;
@@ -179,6 +182,7 @@ export class Call {
       localScreen: this.screen,
       audioSource: this.audioSource,
       noDisplayAudio: this.noDisplayAudio,
+      callInDisplayAudio: this.callInDisplayAudio,
       relayOnly: this.options.relayOnly,
       notice: this.notice,
       chat: this.chat,
@@ -469,6 +473,7 @@ export class Call {
     });
     this.browserAudio = stream.getAudioTracks()[0] ?? null;
     this.noDisplayAudio = !this.browserAudio;
+    this.callInDisplayAudio = capturesCallAudio(stream);
     try { await this.switchShareAudio(this.audioSource); }
     catch { this.audioSource = "browser"; this.notice = "Couldn't open the saved audio source. Choose another source."; }
     if (this.screen !== stream) return;
@@ -517,6 +522,7 @@ export class Call {
     this.browserAudio?.stop();
     this.browserAudio = null;
     this.noDisplayAudio = false;
+    this.callInDisplayAudio = false;
     for (const [link, s] of this.senders) {
       for (const t of s.screen) link.removeTrack(t);
       s.screen = [];

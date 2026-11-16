@@ -483,9 +483,13 @@ function ShareAudio({ call, view, onError }: { call: Call; view: CallView; onErr
   const sharingSystemAudio = view.audioSource === "browser" && !view.noDisplayAudio;
   const playingOn = view.speakerId ? speakers.devices.find((d) => d.deviceId === view.speakerId)?.label ?? "" : speakers.defaultLabel;
   const replayer = sharingSystemAudio ? replayerName(playingOn) : null;
+  // Without restrictOwnAudio the capture records the default output, call included. Playing the
+  // call on another device keeps it out.
+  const callCaptured = sharingSystemAudio && view.callInDisplayAudio && !replayer && playingOn === speakers.defaultLabel;
   return <section class="share-audio" aria-label="Screen share audio">
     {view.noDisplayAudio && view.audioSource === "browser" && <p class="share-audio-warning" role="status" data-testid="no-sound">Your screen has no audio. {tip} You can also share a browser tab and tick "Also share tab audio".</p>}
     {replayer && <p class="share-audio-warning" role="status" data-testid="replayer-echo">The call plays through {replayer}, so your friends hear themselves in your shared sound. In "Call plays on", pick your headset or speakers.</p>}
+    {callCaptured && <p class="share-audio-warning" role="status" data-testid="call-captured">Your browser can't leave the call out of your shared sound, so your friends hear themselves.{pickSpeaker ? ' In "Call plays on", pick headphones or speakers that aren\'t your system default, or share a browser tab instead.' : " Share a browser tab instead, or use Chrome or Edge on Windows or macOS."}</p>}
     <div class="share-audio-fields">
       {pickSpeaker && sharingSystemAudio && (
         <label class="share-audio-field"><span class="field-label">Call plays on</span>

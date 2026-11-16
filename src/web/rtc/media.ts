@@ -64,6 +64,21 @@ export function replayerName(label: string): string | null {
   return known.find(([re]) => re.test(label))?.[1] ?? null;
 }
 
+/**
+ * True when a screen share's system audio also records this page's own playback (the call), so
+ * friends would hear themselves: the browser didn't apply restrictOwnAudio (Linux, Firefox, older
+ * Chrome). A tab share only carries that tab's sound, so it never does.
+ */
+export function capturesCallAudio(stream: MediaStream): boolean {
+  const audio = stream.getAudioTracks()[0];
+  if (!audio) return false;
+  const surface = (stream.getVideoTracks()[0]?.getSettings() as { displaySurface?: string } | undefined)?.displaySurface;
+  if (surface === "browser") return false;
+  const applied = (audio.getSettings() as { restrictOwnAudio?: boolean }).restrictOwnAudio;
+  if (applied !== undefined) return !applied;
+  return !(navigator.mediaDevices.getSupportedConstraints() as { restrictOwnAudio?: boolean }).restrictOwnAudio;
+}
+
 export async function getScreen(preset: SharePreset): Promise<MediaStream> {
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: {
