@@ -38,14 +38,27 @@ export function canPickSpeaker(): boolean {
   return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 }
 
+type Output = Pick<MediaDeviceInfo, "deviceId" | "label" | "groupId">;
+
+/** Chrome lists the system default and communications devices again under these alias ids. */
+const isAlias = (d: Output) => d.deviceId === "default" || d.deviceId === "communications";
+
+/**
+ * The real device behind an alias. Its label carries a localized prefix ("Default - ", "Par défaut - ").
+ * Labels first: two outputs of one sound card (speakers and headphones) can share a groupId.
+ */
+function aliased(alias: Output | undefined, devices: Output[]): Output | undefined {
+  if (!alias) return undefined;
+  return devices.find((d) => d.label !== "" && alias.label.endsWith(d.label))
+    ?? devices.find((d) => d.groupId !== "" && d.groupId === alias.groupId);
+}
+
 /** Output devices, without Chrome's "default"/"communications" aliases (those are listed separately). */
 export async function listSpeakers(): Promise<{ defaultLabel: string; devices: MediaDeviceInfo[] }> {
   const outputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput" && d.deviceId !== "");
+  const devices = outputs.filter((d) => !isAlias(d));
   const fallback = outputs.find((d) => d.deviceId === "default");
-  return {
-    defaultLabel: fallback?.label.replace(/^Default - /, "") ?? "",
-    devices: outputs.filter((d) => d.deviceId !== "default" && d.deviceId !== "communications"),
-  };
+  return { defaultLabel: aliased(fallback, devices)?.label ?? fallback?.label ?? "", devices };
 }
 
 /**
@@ -62,6 +75,21 @@ export function replayerName(label: string): string | null {
     [/boom ?3d/i, "Boom 3D"],
   ];
   return known.find(([re]) => re.test(label))?.[1] ?? null;
+}
+
+/**
+ * When the system default output is a replayer like FxSound, the device the call should play on
+ * instead: the communications device if it's a real one, else the only real device there is.
+ * `deviceId` is null when several devices could be the user's headphones and none stands out.
+ */
+export function speakerBehindReplayer(outputs: readonly (Output & { kind?: string })[]): { replayer: string; deviceId: string | null; label: string } | null {
+  const speakers = outputs.filter((d) => (d.kind ?? "audiooutput") === "audiooutput" && d.deviceId !== "");
+  const replayer = replayerName(speakers.find((d) => d.deviceId === "default")?.label ?? "");
+  if (!replayer) return null;
+  const real = speakers.filter((d) => !isAlias(d) && !replayerName(d.label));
+  const comms = aliased(speakers.find((d) => d.deviceId === "communications"), real);
+  const pick = comms ?? (real.length === 1 ? real[0] : undefined);
+  return { replayer, deviceId: pick?.deviceId ?? null, label: pick?.label ?? "" };
 }
 
 /**

@@ -299,13 +299,18 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
             </button>
           )}
           {view.self.hasMic && (
-            <MicMenu
+            <AudioMenu
               open={menu === "mic"}
               onToggle={() => setMenu(menu === "mic" ? null : "mic")}
-              current={view.micDeviceId}
-              onPick={(id) => {
+              mic={view.micDeviceId}
+              speaker={view.speakerId}
+              onPickMic={(id) => {
                 setMenu(null);
                 void run(call.switchMic(id), "Couldn't switch to that microphone.");
+              }}
+              onPickSpeaker={(id) => {
+                setMenu(null);
+                void run(call.setSpeaker(id), "Couldn't play the call on that device. Choose another one.");
               }}
             />
           )}
@@ -467,24 +472,57 @@ function Seat({ name, you, host, muted, sharing, connection, level, volume, onVo
   );
 }
 
-function MicMenu({ open, onToggle, current, onPick }: { open: boolean; onToggle: () => void; current: string | null; onPick: (id: string) => void }) {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+interface AudioMenuProps {
+  open: boolean;
+  onToggle: () => void;
+  mic: string | null;
+  /** "" is the system default. */
+  speaker: string;
+  onPickMic: (id: string) => void;
+  onPickSpeaker: (id: string) => void;
+}
+
+/** Microphone and, where the browser can route playback, the device the call plays on. */
+function AudioMenu({ open, onToggle, mic, speaker, onPickMic, onPickSpeaker }: AudioMenuProps) {
+  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  const [speakers, setSpeakers] = useState<{ defaultLabel: string; devices: MediaDeviceInfo[] } | null>(null);
   useEffect(() => {
-    if (open) void listMics().then(setDevices);
+    if (!open) return;
+    void listMics().then(setMics);
+    if (canPickSpeaker()) void listSpeakers().then(setSpeakers).catch(() => undefined);
   }, [open]);
+  const echoHint = (label: string) => replayerName(label) && <span class="menu-item-hint">Replays the call, so friends hear their own voice</span>;
   return (
     <div class="menu-anchor">
-      <button class="btn btn-dock btn-icon" aria-expanded={open} aria-label="Choose microphone" onClick={onToggle}>
+      <button class="btn btn-dock btn-icon" aria-expanded={open} aria-label="Choose microphone and speaker" onClick={onToggle}>
         <ChevronIcon />
       </button>
       {open && (
-        <div class="menu" role="menu" aria-label="Microphone">
-          {devices.length === 0 && <p class="menu-empty">No other microphones found.</p>}
-          {devices.map((d, i) => (
-            <button key={d.deviceId} role="menuitemradio" aria-checked={d.deviceId === current} class="menu-item" onClick={() => onPick(d.deviceId)}>
-              <span class="menu-item-title">{d.label || `Microphone ${i + 1}`}</span>
-            </button>
-          ))}
+        <div class="menu" role="menu" aria-label="Audio devices" data-testid="audio-menu">
+          <div role="group" aria-labelledby="menu-mics" class="menu-group">
+            <p id="menu-mics" class="menu-heading">Microphone</p>
+            {mics.length === 0 && <p class="menu-empty">No other microphones found.</p>}
+            {mics.map((d, i) => (
+              <button key={d.deviceId} role="menuitemradio" aria-checked={d.deviceId === mic} class="menu-item" onClick={() => onPickMic(d.deviceId)}>
+                <span class="menu-item-title">{d.label || `Microphone ${i + 1}`}</span>
+              </button>
+            ))}
+          </div>
+          {speakers && (
+            <div role="group" aria-labelledby="menu-speakers" class="menu-group">
+              <p id="menu-speakers" class="menu-heading">Call plays on</p>
+              <button role="menuitemradio" aria-checked={speaker === ""} class="menu-item" onClick={() => onPickSpeaker("")}>
+                <span class="menu-item-title">System default{speakers.defaultLabel ? `: ${speakers.defaultLabel}` : ""}</span>
+                {echoHint(speakers.defaultLabel)}
+              </button>
+              {speakers.devices.map((d, i) => (
+                <button key={d.deviceId} role="menuitemradio" aria-checked={d.deviceId === speaker} class="menu-item" onClick={() => onPickSpeaker(d.deviceId)}>
+                  <span class="menu-item-title">{d.label || `Speaker ${i + 1}`}</span>
+                  {echoHint(d.label)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

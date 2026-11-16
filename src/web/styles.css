@@ -828,6 +828,29 @@ select.input {
   padding: 0.6rem 0.8rem;
 }
 
+.menu-group {
+  display: grid;
+  gap: 2px;
+}
+
+.menu-group + .menu-group {
+  margin-top: 0.3rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--seam);
+}
+
+.menu-heading {
+  padding: 0.35rem 0.8rem 0.2rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--dust);
+}
+
+.menu {
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+}
+
 /* Stats */
 .stats {
   position: fixed;
