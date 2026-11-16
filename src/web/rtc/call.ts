@@ -19,6 +19,7 @@ import {
   type ServerMessage,
 } from "../../shared/protocol.ts";
 import { AudioEngine, type Meter } from "./audio.ts";
+import { Voice } from "./denoise.ts";
 import { canPickSpeaker, capturesCallAudio, getMic, getScreen, micConstraints, speakerBehindReplayer } from "./media.ts";
 import { PeerLink } from "./peer.ts";
 import { AUDIO_MAX_BITRATE, PRESETS } from "./presets.ts";
@@ -48,6 +49,10 @@ export interface CallView {
   locked: boolean;
   self: MemberState;
   micDeviceId: string | null;
+  /** Noise filter (GTCRN) on the outgoing voice, keeping keyboard and mouse clicks out of the call. */
+  noiseFilter: boolean;
+  /** False when this browser can't run the filter. */
+  canFilterNoise: boolean;
   /** Where the call plays; "" is the system default. */
   speakerId: string;
   localScreen: MediaStream | null;
@@ -98,7 +103,10 @@ export class Call {
   private readonly listeners = new Set<(v: CallView) => void>();
   private iceServers: RTCIceServer[] = [];
   private resume: string | null;
+  private voice: Voice | null = null;
+  /** The voice as sent (`voice.stream`). */
   private mic: MediaStream | null = null;
+  private noiseFilter = savedNoiseFilter();
   private micMeter: Meter | null = null;
   private screen: MediaStream | null = null;
   private browserAudio: MediaStreamTrack | null = null;
@@ -186,6 +194,8 @@ export class Call {
       locked: this.locked,
       self: this.state,
       micDeviceId: this.micDeviceId,
+      noiseFilter: this.noiseFilter,
+      canFilterNoise: this.voice?.canFilter ?? false,
       speakerId: this.speakerId,
       localScreen: this.screen,
       audioSource: this.audioSource,
@@ -215,7 +225,7 @@ export class Call {
   join(name: string, mic: MediaStream | null, micDeviceId: string | null): void {
     this.name = name;
     this.audio.resume();
-    this.setMic(mic);
+    this.setVoice(mic ? new Voice(mic) : null);
     this.micDeviceId = micDeviceId;
     this.state = { ...this.state, hasMic: mic !== null };
     this.setPhase("connecting");
@@ -231,7 +241,7 @@ export class Call {
     for (const id of [...this.remotes.keys()]) this.dropRemote(id);
     this.transfers.close();
     this.stopShare();
-    this.setMic(null);
+    this.setVoice(null);
     this.audio.close();
     this.setPhase("left");
   }
@@ -419,15 +429,33 @@ export class Call {
   // ---------------------------------------------------------------------------
   // Local media actions
 
-  private setMic(stream: MediaStream | null): void {
-    if (this.mic && this.mic !== stream) this.stopTracks(this.mic);
+  private setVoice(voice: Voice | null): void {
+    if (this.voice !== voice) this.voice?.dispose();
     this.micMeter?.dispose();
     this.micMeter = null;
-    this.mic = stream;
-    if (stream) {
-      for (const t of stream.getAudioTracks()) t.enabled = !this.state.muted;
-      if (stream.getAudioTracks().length > 0) this.micMeter = this.audio.meter(stream);
-    }
+    this.voice = voice;
+    this.mic = voice?.stream ?? null;
+    if (!voice) return;
+    for (const t of voice.stream.getAudioTracks()) t.enabled = !this.state.muted;
+    // Metered after the filter, so a click doesn't light the speaking ring either.
+    if (voice.stream.getAudioTracks().length > 0) this.micMeter = this.audio.meter(voice.stream);
+    this.applyNoiseFilter(voice);
+  }
+
+  private applyNoiseFilter(voice: Voice): void {
+    voice.setFiltered(this.noiseFilter).catch((err: unknown) => {
+      console.warn(err);
+      if (voice !== this.voice || !this.noiseFilter) return;
+      this.notice = "Couldn't start the noise filter. Friends hear your microphone without it.";
+      this.emit();
+    });
+  }
+
+  setNoiseFilter(on: boolean): void {
+    this.noiseFilter = on;
+    try { localStorage.setItem("streamroom:noise-filter", on ? "on" : "off"); } catch { /* Storage is optional. */ }
+    if (this.voice) this.applyNoiseFilter(this.voice);
+    this.emit();
   }
 
   private broadcastState(): void {
@@ -443,18 +471,25 @@ export class Call {
 
   /** Swap the microphone device without renegotiating. */
   private async replaceMic(deviceId: string | null): Promise<void> {
-    const next = await getMic(deviceId);
-    const track = next.getAudioTracks()[0] ?? null;
+    const raw = await getMic(deviceId);
+    const picked = raw.getAudioTracks()[0]?.getSettings().deviceId;
+    const next = new Voice(raw);
+    const track = next.stream.getAudioTracks()[0] ?? null;
     if (!this.mic) {
       // Joined without a mic: start sending one now (this renegotiates).
-      this.setMic(next);
-      for (const [link, s] of this.senders) s.mic = this.sendMic(link, next);
+      this.setVoice(next);
+      for (const [link, s] of this.senders) s.mic = this.sendMic(link, next.stream);
     } else {
       if (track) track.enabled = !this.state.muted;
-      await Promise.all([...this.senders.values()].map((s) => s.mic?.sender.replaceTrack(track)));
-      this.setMic(next);
+      try {
+        await Promise.all([...this.senders.values()].map((s) => s.mic?.sender.replaceTrack(track)));
+      } catch (err) {
+        next.dispose();
+        throw err;
+      }
+      this.setVoice(next);
     }
-    this.micDeviceId = track?.getSettings().deviceId ?? deviceId;
+    this.micDeviceId = picked ?? deviceId;
     this.state = { ...this.state, hasMic: true };
     this.broadcastState();
   }
@@ -779,6 +814,10 @@ function writeResume(roomId: RoomId, token: string): void {
 
 function savedSpeaker(): string {
   try { return localStorage.getItem("streamroom:speaker") ?? ""; } catch { return ""; }
+}
+
+function savedNoiseFilter(): boolean {
+  try { return localStorage.getItem("streamroom:noise-filter") !== "off"; } catch { return true; }
 }
 
 function savedAudioSource(): string {

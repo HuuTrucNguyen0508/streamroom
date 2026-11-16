@@ -304,6 +304,8 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
               onToggle={() => setMenu(menu === "mic" ? null : "mic")}
               mic={view.micDeviceId}
               speaker={view.speakerId}
+              noiseFilter={view.canFilterNoise ? view.noiseFilter : null}
+              onNoiseFilter={(on) => call.setNoiseFilter(on)}
               onPickMic={(id) => {
                 setMenu(null);
                 void run(call.switchMic(id), "Couldn't switch to that microphone.");
@@ -478,12 +480,15 @@ interface AudioMenuProps {
   mic: string | null;
   /** "" is the system default. */
   speaker: string;
+  /** null when this browser can't filter. */
+  noiseFilter: boolean | null;
+  onNoiseFilter: (on: boolean) => void;
   onPickMic: (id: string) => void;
   onPickSpeaker: (id: string) => void;
 }
 
 /** Microphone and, where the browser can route playback, the device the call plays on. */
-function AudioMenu({ open, onToggle, mic, speaker, onPickMic, onPickSpeaker }: AudioMenuProps) {
+function AudioMenu({ open, onToggle, mic, speaker, noiseFilter, onNoiseFilter, onPickMic, onPickSpeaker }: AudioMenuProps) {
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<{ defaultLabel: string; devices: MediaDeviceInfo[] } | null>(null);
   useEffect(() => {
@@ -508,6 +513,15 @@ function AudioMenu({ open, onToggle, mic, speaker, onPickMic, onPickSpeaker }: A
               </button>
             ))}
           </div>
+          {noiseFilter !== null && (
+            <div role="group" aria-label="Voice" class="menu-group">
+              <button role="menuitemcheckbox" aria-checked={noiseFilter} class="menu-item menu-toggle" data-testid="noise-filter" onClick={() => onNoiseFilter(!noiseFilter)}>
+                <span class="menu-item-title">Filter background noise</span>
+                <span class="menu-item-hint">Keeps keyboard and mouse clicks out of the call</span>
+                <span class="menu-lamp" aria-hidden="true" />
+              </button>
+            </div>
+          )}
           {speakers && (
             <div role="group" aria-labelledby="menu-speakers" class="menu-group">
               <p id="menu-speakers" class="menu-heading">Call plays on</p>
