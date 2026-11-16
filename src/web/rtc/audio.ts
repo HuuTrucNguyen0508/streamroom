@@ -12,6 +12,8 @@ export class AudioEngine {
   private readonly players = new Map<string, HTMLAudioElement>();
   /** Output device for every player; "" is the system default. */
   private sinkId = "";
+  /** Players already playing; the rest are routed when they start (see play). */
+  private readonly routable = new WeakSet<HTMLAudioElement>();
 
   resume(): void {
     if (this.ctx.state === "suspended") void this.ctx.resume().catch(() => undefined);
@@ -45,23 +47,36 @@ export class AudioEngine {
 
   /** Start (or keep) playing a remote stream. */
   play(key: string, stream: MediaStream, volume: number): void {
-    let el = this.players.get(key);
-    if (!el) {
-      el = new Audio();
-      el.autoplay = true;
-      this.players.set(key, el);
-      if (this.sinkId) void applySink(el, this.sinkId).catch(() => undefined); // Gone device: system default.
+    const existing = this.players.get(key);
+    if (existing) {
+      existing.volume = volume;
+      return;
     }
-    if (el.srcObject !== stream) el.srcObject = stream;
+    const el = new Audio();
+    el.autoplay = true;
+    el.srcObject = stream;
     el.volume = volume;
-    void el.play().catch(() => undefined);
+    this.players.set(key, el);
+    // Route the player only once it plays. A sink set on an element before its stream loads is
+    // reported as applied while the call plays on the system default (FxSound), and setting the
+    // same id again does nothing, so a friend who rejoined was heard through the default output.
+    void el.play().catch(() => undefined).then(async () => {
+      this.routable.add(el);
+      if (this.players.get(key) === el && this.sinkId) await applySink(el, this.sinkId);
+    }).catch(() => undefined); // Gone device: system default.
   }
 
   /** Play the call on this output device ("" = system default). Rejects if the device can't be used. */
   async setSink(sinkId: string): Promise<void> {
-    const players = [...this.players.values()];
-    await Promise.all(players.map((el) => applySink(el, sinkId)));
-    this.sinkId = sinkId;
+    const previous = this.sinkId;
+    this.sinkId = sinkId; // A player that starts meanwhile goes here too.
+    const players = [...this.players.values()].filter((el) => this.routable.has(el));
+    try {
+      await Promise.all(players.map((el) => applySink(el, sinkId)));
+    } catch (err) {
+      this.sinkId = previous;
+      throw err;
+    }
   }
 
   setVolume(keyPrefix: string, volume: number): void {

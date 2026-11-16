@@ -33,9 +33,13 @@ test("ultrawide viewer sees the whole share; the call moves off FxSound to the h
         fake("arctis-chat", "Headset Earphone (Arctis 7 Chat)"),
       ];
       // Fake device ids can't reach the real setSinkId; record where each player was sent instead.
+      // A sink set before the player plays its stream never reaches the speakers (the call stayed
+      // on FxSound after a friend rejoined), so only a playing player's routing counts.
       const w = window as unknown as { __sinks: string[] };
       w.__sinks = [];
-      HTMLMediaElement.prototype.setSinkId = async function (sinkId: string) { w.__sinks.push(sinkId); };
+      HTMLMediaElement.prototype.setSinkId = async function (this: HTMLMediaElement, sinkId: string) {
+        w.__sinks.push(this.srcObject && !this.paused ? sinkId : `ignored:${sinkId}`);
+      };
     });
     for (const [page, name] of [[viewer, "Viewer"], [sharer, "Sharer"]] as const) {
       await page.goto(`/r/${id}`); await page.getByLabel("Your name").fill(name);
@@ -86,6 +90,16 @@ test("ultrawide viewer sees the whole share; the call moves off FxSound to the h
     await speaker.selectOption("arctis-chat");
     await expect(sharer.getByTestId("replayer-echo")).toHaveCount(0);
     expect(await sharer.evaluate(() => localStorage.getItem("streamroom:speaker"))).toBe("arctis-chat");
+
+    // The viewer leaves and rejoins: the sharer's new player for them goes to the headset too.
+    const routed = () => sharer.evaluate(() => (window as unknown as { __sinks: string[] }).__sinks.filter((s) => s === "arctis-chat").length);
+    const before = await routed();
+    await viewer.getByRole("button", { name: "Leave", exact: true }).click();
+    await viewer.getByRole("button", { name: "Rejoin" }).click();
+    await viewer.getByLabel("Your name").fill("Viewer");
+    await viewer.getByRole("button", { name: "Join room", exact: true }).click();
+    await expect(viewer.locator('[data-phase="in-call"]')).toBeVisible();
+    await expect.poll(routed).toBeGreaterThan(before);
 
     // The choice survives a reload: new players go straight to the headset.
     await sharer.reload();
