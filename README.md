@@ -97,6 +97,12 @@ Limits:
 - The sender must stay in the room with the tab open until everyone has the file. If the sender leaves or reconnects, their earlier files can no longer be downloaded; share them again.
 - Received files stay in the tab's memory until saved and dismissed, or until the tab leaves the room.
 
+## Point and draw
+
+Press the pen in a shared screen's caption to point and draw on it. Everyone watching that screen sees your pointer with your name, and your strokes in your color. Hold the mouse button, or touch and drag, to draw. A stroke stays for a few seconds after you let go, then fades. The eraser clears your own strokes, and **Esc** or the pen puts the pen down. Clicks pass through to the page again once the pen is down.
+
+Pointers and strokes travel directly between browsers on a `draw` data channel, as fractions of the shared picture, so they line up on any screen size. They are never stored. The person sharing sees the marks on their own preview in Streamroom, not on their real desktop: drawing over the desktop itself would need a small app on the sharer's computer.
+
 ## Browser limits
 
 Use a desktop Chromium browser for screen capture. Chrome on Windows can share system audio. On Linux, Chrome can capture tab audio but cannot capture whole-system audio through the screen picker. On macOS with Chrome 141 or later, enable system audio when offered. Select a browser tab and enable its audio option in the picker. Available sources depend on the browser and operating system. Mobile browsers can join voice and view shares, but screen capture support varies.
