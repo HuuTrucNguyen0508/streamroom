@@ -95,3 +95,13 @@ export const DownloadIcon = (p: P) => (
     <path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" />
   </Svg>
 );
+export const PenIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 20l1.2-4.6L15.6 5a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8 4 20zM13.5 7l3.5 3.5" />
+  </Svg>
+);
+export const EraserIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M8.5 20H20M4.6 14.6l8.8-8.8a2 2 0 0 1 2.8 0l2.8 2.8a2 2 0 0 1 0 2.8L11 19.4a2 2 0 0 1-1.4.6H8.3a2 2 0 0 1-1.4-.6l-2.3-2.3a2 2 0 0 1 0-2.5zM9 10.2l5 5" />
+  </Svg>
+);

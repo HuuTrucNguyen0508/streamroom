@@ -27,6 +27,7 @@ import { Signaling } from "./signaling.ts";
 import { StatsSampler, type MediaLabel, type PeerStats } from "./stats.ts";
 import { PREVIEW_FETCH_BYTES, previewKind } from "./files.ts";
 import { FileTransfers, downloadKey, type TransfersView } from "./transfers.ts";
+import { DRAW_LABEL, Draw } from "./draw.ts";
 
 export type Phase = "idle" | "connecting" | "in-call" | "reconnecting" | "full" | "locked" | "left";
 
@@ -143,6 +144,8 @@ export class Call {
     maxMessageSize: (member) => this.remotes.get(member)?.link?.maxMessageSize ?? 0,
     changed: () => this.emit(),
   });
+  /** Pointers and pen strokes over shared screens. Changes reach `draw.subscribe`, not the view. */
+  readonly draw = new Draw(() => this.selfId);
   view: CallView;
 
   constructor(
@@ -240,6 +243,7 @@ export class Call {
     for (const pending of [...this.pendingChat]) this.settleChat(pending, true);
     for (const id of [...this.remotes.keys()]) this.dropRemote(id);
     this.transfers.close();
+    this.draw.close();
     this.stopShare();
     this.setVoice(null);
     this.audio.close();
@@ -360,11 +364,16 @@ export class Call {
       {
         signal: (data) => this.sig.send({ t: "signal", to: info.id, data }),
         track: (track, streams) => this.onRemoteTrack(remote, track, streams),
-        channel: (dc) => this.transfers.channel(info.id, dc),
+        channel: (dc) => (dc.label === DRAW_LABEL ? this.draw.channel(info.id, dc) : this.transfers.channel(info.id, dc)),
         change: () => this.emit(),
       },
     );
     remote.link = link;
+    // Like "ctl", the impolite side opens it; the other side gets it through `channel`.
+    if (!link.polite) {
+      const dc = link.openChannel(DRAW_LABEL);
+      if (dc) this.draw.channel(info.id, dc);
+    }
     const senders: LinkSenders = { mic: null, screen: [], screenAudio: null };
     this.senders.set(link, senders);
     const attach = () => {
@@ -387,6 +396,7 @@ export class Call {
       this.senders.delete(remote.link);
       remote.link.close();
       this.transfers.linkClosed(id);
+      this.draw.linkClosed(id);
     }
     remote.meter?.meter.dispose();
     this.audio.stop(`${id}/`);

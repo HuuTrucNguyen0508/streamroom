@@ -1,13 +1,16 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { PRESET_IDS, type MemberId, type PresetId } from "../../shared/protocol.ts";
 import type { Call, CallView } from "../rtc/call.ts";
+import type { Draw } from "../rtc/draw.ts";
 import { canPickSpeaker, listMics, listSpeakers, replayerName } from "../rtc/media.ts";
 import { PRESETS } from "../rtc/presets.ts";
 import { ChatPanel, type Staged } from "./ChatPanel.tsx";
+import { DrawLayer } from "./DrawLayer.tsx";
 import { initials, useLevel } from "./hooks.ts";
 import {
   ChatIcon,
   ChevronIcon,
+  EraserIcon,
   ExpandIcon,
   GaugeIcon,
   LeaveIcon,
@@ -15,6 +18,7 @@ import {
   LockIcon,
   MicIcon,
   MicOffIcon,
+  PenIcon,
   ScreenIcon,
   StopScreenIcon,
   UnlockIcon,
@@ -241,7 +245,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
 
       <main class="floor">
         {stage ? (
-          <Stage share={stage} shares={shares} onPick={setStageId} />
+          <Stage share={stage} shares={shares} onPick={setStageId} draw={call.draw} view={view} />
         ) : (
           <div class="empty-stage">
             <p class="empty-title">{view.members.length === 0 ? "You're the first one here." : "Nobody is sharing."}</p>
@@ -390,15 +394,52 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   );
 }
 
-function Stage({ share, shares, onPick }: { share: Share; shares: Share[]; onPick: (id: Share["id"]) => void }) {
+interface StageProps {
+  share: Share;
+  shares: Share[];
+  onPick: (id: Share["id"]) => void;
+  draw: Draw;
+  view: CallView;
+}
+
+function Stage({ share, shares, onPick, draw, view }: StageProps) {
   const frameRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [drawing, setDrawing] = useState(false);
+  const stopDrawing = useCallback(() => setDrawing(false), []);
+  // Marks belong to one share: switching screens puts the pen down.
+  useEffect(() => {
+    setDrawing(false);
+  }, [share.id]);
+  const owner = share.id === "self" ? view.selfId : share.id;
+  const names = useMemo(() => new Map(view.members.map((m) => [m.id, m.name])), [view.members]);
   return (
     <section class="stage" aria-label={`${share.name === "You" ? "Your" : `${share.name}'s`} screen`}>
       <div class="stage-frame" ref={frameRef} data-testid="stage">
-        {share.stream ? <Video stream={share.stream} /> : <p class="stage-wait">Connecting to {share.name}'s screen.</p>}
+        {share.stream ? <Video stream={share.stream} videoRef={videoRef} /> : <p class="stage-wait">Connecting to {share.name}'s screen.</p>}
+        {share.stream && owner && (
+          <DrawLayer draw={draw} share={owner} selfId={view.selfId} video={videoRef} names={names} active={drawing} onExit={stopDrawing} />
+        )}
         <div class="stage-caption">
           <span>{share.id === "self" ? "You are sharing" : `${share.name} is sharing`}</span>
           <span class="stage-preset">{PRESETS[share.preset].label}</span>
+          {share.stream && owner && (
+            <button
+              class="btn btn-ghost btn-sm"
+              aria-pressed={drawing}
+              data-testid="draw-toggle"
+              onClick={() => setDrawing(!drawing)}
+              aria-label={drawing ? "Stop drawing" : "Point and draw on this screen"}
+              title={drawing ? "Stop drawing (Esc)" : "Point and draw"}
+            >
+              <PenIcon width={16} height={16} />
+            </button>
+          )}
+          {drawing && owner && (
+            <button class="btn btn-ghost btn-sm" data-testid="draw-clear" onClick={() => draw.send({ t: "clear", s: owner })} aria-label="Clear your drawing" title="Clear your drawing">
+              <EraserIcon width={16} height={16} />
+            </button>
+          )}
           <button class="btn btn-ghost btn-sm" onClick={() => void frameRef.current?.requestFullscreen?.()} aria-label="Fullscreen">
             <ExpandIcon width={16} height={16} />
           </button>
@@ -417,8 +458,9 @@ function Stage({ share, shares, onPick }: { share: Share; shares: Share[]; onPic
   );
 }
 
-function Video({ stream }: { stream: MediaStream }) {
-  const ref = useRef<HTMLVideoElement>(null);
+function Video({ stream, videoRef }: { stream: MediaStream; videoRef?: { current: HTMLVideoElement | null } }) {
+  const own = useRef<HTMLVideoElement>(null);
+  const ref = videoRef ?? own;
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
