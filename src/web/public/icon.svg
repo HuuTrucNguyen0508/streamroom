@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Streamroom: a shared screen with a pen stroke on it, and three seats in front. No plate, so
+       it sits on light and dark taskbars alike. scripts/icons.sh renders the PNGs from this file. -->
+  <defs>
+    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd38a"/>
+      <stop offset="0.5" stop-color="#f4b860"/>
+      <stop offset="1" stop-color="#de7f3a"/>
+    </linearGradient>
+    <linearGradient id="display" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2649"/>
+      <stop offset="1" stop-color="#15132a"/>
+    </linearGradient>
+    <linearGradient id="seat" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ddd8f4"/>
+      <stop offset="1" stop-color="#8b84b6"/>
+    </linearGradient>
+    <g id="seats">
+      <path d="M40 202a20 20 0 0 1 20-20h12a20 20 0 0 1 20 20V226a6 6 0 0 1-6 6H46a6 6 0 0 1-6-6z"/>
+      <path d="M102 196a20 20 0 0 1 20-20h12a20 20 0 0 1 20 20V226a6 6 0 0 1-6 6H108a6 6 0 0 1-6-6z"/>
+      <path d="M164 202a20 20 0 0 1 20-20h12a20 20 0 0 1 20 20V226a6 6 0 0 1-6 6H170a6 6 0 0 1-6-6z"/>
+    </g>
+    <!-- A clear gap around the seats keeps them apart from the screen at small sizes. -->
+    <mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <rect width="256" height="256" fill="#fff"/>
+      <use href="#seats" fill="#000" stroke="#000" stroke-width="14"/>
+    </mask>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#15132a" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <g mask="url(#gap)">
+      <rect x="18" y="26" width="220" height="164" rx="24" fill="url(#frame)"/>
+      <rect x="19.5" y="27.5" width="217" height="161" rx="22.5" fill="none" stroke="#fff3dc" stroke-opacity="0.6" stroke-width="3"/>
+      <rect x="34" y="42" width="188" height="132" rx="12" fill="url(#display)"/>
+      <path d="M62 118c14-30 30-30 40-8s24 26 38 0 30-30 52-6" fill="none" stroke="#f4b860" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <use href="#seats" fill="url(#seat)"/>
+  </g>
+</svg>

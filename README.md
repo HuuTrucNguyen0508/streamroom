@@ -103,6 +103,12 @@ Press the pen in a shared screen's caption to point and draw on it. Everyone wat
 
 Pointers and strokes travel directly between browsers on a `draw` data channel, as fractions of the shared picture, so they line up on any screen size. They are never stored. The person sharing sees the marks on their own preview in Streamroom, not on their real desktop: drawing over the desktop itself would need a small app on the sharer's computer.
 
+## Install as an app
+
+Streamroom can be installed as an app from Edge or Chrome. On Windows 11, open Streamroom, then select **Install Streamroom** in the address bar, or open the browser menu and select **Apps** > **Install Streamroom**. The app opens in its own window and gets an icon on the Start menu and the taskbar. Room links you open in the app stay in the app's window. Installing needs HTTPS, or `localhost` when you run Streamroom on your own computer.
+
+The icons in `src/web/public` are rendered from `icon.svg`. After you change it, run `scripts/icons.sh` to render them again (it needs `resvg` and ImageMagick).
+
 ## Browser limits
 
 Use a desktop Chromium browser for screen capture. Chrome on Windows can share system audio. On Linux, Chrome can capture tab audio but cannot capture whole-system audio through the screen picker. On macOS with Chrome 141 or later, enable system audio when offered. Select a browser tab and enable its audio option in the picker. Available sources depend on the browser and operating system. Mobile browsers can join voice and view shares, but screen capture support varies.
