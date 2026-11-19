@@ -126,6 +126,28 @@ describe("DrawBoard", () => {
     for (const s of shares) board.apply(alice, { t: "move", s, x: 0, y: 0 }, 0);
     expect(shares.filter((s) => board.visible(s, 1).length > 0)).toHaveLength(16);
   });
+
+  it("frees a share's slot when its member leaves, so drawing keeps working all evening", () => {
+    const board = new DrawBoard();
+    // Sixteen people share in turn; Alice scribbles on each, and each leaves before the share is shown again.
+    for (let i = 0; i < 16; i++) {
+      const sharer = `sharer${String(i).padStart(5, "0")}` as MemberId;
+      board.apply(alice, { t: "down", s: sharer, x: 0.5, y: 0.5 }, i);
+      board.apply(alice, { t: "up", s: sharer }, i);
+      board.forget(sharer);
+    }
+    board.apply(alice, { t: "down", s: host, x: 0.5, y: 0.5 }, 100);
+    expect(board.visible(host, 100)).toHaveLength(1);
+  });
+
+  it("drops a share's slot once its last author leaves", () => {
+    const board = new DrawBoard();
+    const shares = Array.from({ length: 16 }, (_, i) => `share${String(i).padStart(6, "0")}` as MemberId);
+    for (const s of shares) board.apply(bob, { t: "move", s, x: 0, y: 0 }, 0);
+    board.forget(bob);
+    board.apply(alice, { t: "move", s: host, x: 0, y: 0 }, 0);
+    expect(board.visible(host, 1)).toHaveLength(1);
+  });
 });
 
 describe("contentRect", () => {

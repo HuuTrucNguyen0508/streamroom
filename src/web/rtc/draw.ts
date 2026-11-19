@@ -131,9 +131,13 @@ export class DrawBoard {
     }
   }
 
-  /** `author` left or its link closed: its marks go everywhere. */
-  forget(author: MemberId): void {
-    for (const byAuthor of this.shares.values()) byAuthor.delete(author);
+  /** `member` left or its link closed: its marks go everywhere, and so does its share's slot. */
+  forget(member: MemberId): void {
+    this.shares.delete(member);
+    for (const [share, byAuthor] of this.shares) {
+      byAuthor.delete(member);
+      if (byAuthor.size === 0) this.shares.delete(share);
+    }
   }
 
   clearAll(): void {
