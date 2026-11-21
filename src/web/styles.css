@@ -586,6 +586,67 @@ select.input {
   font-weight: 600;
 }
 
+/* On but not drawing: the note above the caption says why. */
+.glass-toggle[aria-pressed="true"][data-state="attention"] {
+  color: var(--flare);
+}
+
+.glass-toggle[aria-pressed="true"][data-state="pending"] {
+  color: var(--dust);
+}
+
+.glass-note {
+  position: absolute;
+  left: 0.75rem;
+  bottom: 3.4rem;
+  max-width: min(36rem, calc(100% - 1.5rem));
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--r-md);
+  background: rgb(21 19 42 / 0.9);
+  backdrop-filter: blur(8px);
+  box-shadow: inset 3px 0 0 var(--flare);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.glass-note[data-tone="quiet"] {
+  box-shadow: inset 3px 0 0 var(--seam);
+  color: var(--dust);
+}
+
+.glass-note p {
+  margin: 0;
+}
+
+.glass-note .glass-after {
+  color: var(--dust);
+  font-size: 0.8125rem;
+}
+
+.glass-command {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.glass-command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--r-sm);
+  background: var(--velvet);
+  color: var(--paper);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  user-select: all;
+}
+
 .stage-preset {
   color: var(--tungsten);
   font-weight: 500;

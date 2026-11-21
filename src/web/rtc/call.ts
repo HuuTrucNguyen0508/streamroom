@@ -28,6 +28,7 @@ import { StatsSampler, type MediaLabel, type PeerStats } from "./stats.ts";
 import { PREVIEW_FETCH_BYTES, previewKind } from "./files.ts";
 import { FileTransfers, downloadKey, type TransfersView } from "./transfers.ts";
 import { DRAW_LABEL, Draw } from "./draw.ts";
+import { Glass } from "./glass.ts";
 
 export type Phase = "idle" | "connecting" | "in-call" | "reconnecting" | "full" | "locked" | "left";
 
@@ -146,6 +147,15 @@ export class Call {
   });
   /** Pointers and pen strokes over shared screens. Changes reach `draw.subscribe`, not the view. */
   readonly draw = new Draw(() => this.selfId);
+  /** Our own share's marks, drawn on our real desktop by Streamroom Glass when it's turned on. */
+  readonly glass = new Glass({
+    draw: this.draw,
+    names: () => {
+      const names = new Map([...this.remotes.values()].map((r) => [r.info.id, r.info.name]));
+      if (this.selfId) names.set(this.selfId, this.name);
+      return names;
+    },
+  });
   view: CallView;
 
   constructor(
@@ -178,6 +188,7 @@ export class Call {
 
   private emit(): void {
     this.view = this.buildView();
+    this.glass.update(this.screen, this.selfId);
     for (const fn of this.listeners) fn(this.view);
   }
 

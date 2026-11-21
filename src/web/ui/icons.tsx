@@ -100,6 +100,13 @@ export const PenIcon = (p: P) => (
     <path d="M4 20l1.2-4.6L15.6 5a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8 4 20zM13.5 7l3.5 3.5" />
   </Svg>
 );
+/** A screen with a pen mark on it: marks on the real desktop. */
+export const ScreenMarksIcon = (p: P) => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="12" rx="2" />
+    <path d="M8.5 20h7M12 16v4M7 11.5c1.2-2.2 2.4-2.2 3.4-.6s2.2 1.6 3.3-.4 2.1-1.8 3.3-.2" />
+  </Svg>
+);
 export const EraserIcon = (p: P) => (
   <Svg {...p}>
     <path d="M8.5 20H20M4.6 14.6l8.8-8.8a2 2 0 0 1 2.8 0l2.8 2.8a2 2 0 0 1 0 2.8L11 19.4a2 2 0 0 1-1.4.6H8.3a2 2 0 0 1-1.4-.6l-2.3-2.3a2 2 0 0 1 0-2.5zM9 10.2l5 5" />

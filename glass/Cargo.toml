@@ -1,0 +1,24 @@
+[package]
+name = "streamroom-glass"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Draws Streamroom pointers and pen strokes on the sharer's real desktop"
+publish = false
+
+[dependencies]
+tiny-skia = "0.12"
+ab_glyph = "0.2"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+wayland-client = "0.31"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "s"

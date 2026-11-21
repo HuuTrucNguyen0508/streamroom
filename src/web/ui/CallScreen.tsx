@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import { PRESET_IDS, type MemberId, type PresetId } from "../../shared/protocol.ts";
 import type { Call, CallView } from "../rtc/call.ts";
 import type { Draw } from "../rtc/draw.ts";
+import { glassCommand, type Glass, type GlassState } from "../rtc/glass.ts";
 import { canPickSpeaker, listMics, listSpeakers, replayerName } from "../rtc/media.ts";
 import { PRESETS } from "../rtc/presets.ts";
 import { ChatPanel, type Staged } from "./ChatPanel.tsx";
@@ -20,6 +21,7 @@ import {
   MicOffIcon,
   PenIcon,
   ScreenIcon,
+  ScreenMarksIcon,
   StopScreenIcon,
   UnlockIcon,
 } from "./icons.tsx";
@@ -52,6 +54,18 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
   const chatToggle = useRef<HTMLButtonElement>(null);
   const closeChat = () => { setChatOpen(false); requestAnimationFrame(() => chatToggle.current?.focus()); };
   const [chatOpen, setChatOpen] = useState(false);
+  // Coming back to this tab is the moment someone has just started Streamroom Glass.
+  useEffect(() => {
+    const retry = () => {
+      if (document.visibilityState === "visible") call.glass.retry();
+    };
+    window.addEventListener("focus", retry);
+    document.addEventListener("visibilitychange", retry);
+    return () => {
+      window.removeEventListener("focus", retry);
+      document.removeEventListener("visibilitychange", retry);
+    };
+  }, [call]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const sendInFlight = useRef(false);
@@ -245,7 +259,7 @@ export function CallScreen({ call, view }: { call: Call; view: CallView }) {
 
       <main class="floor">
         {stage ? (
-          <Stage share={stage} shares={shares} onPick={setStageId} draw={call.draw} view={view} />
+          <Stage share={stage} shares={shares} onPick={setStageId} draw={call.draw} glass={call.glass} view={view} />
         ) : (
           <div class="empty-stage">
             <p class="empty-title">{view.members.length === 0 ? "You're the first one here." : "Nobody is sharing."}</p>
@@ -399,10 +413,11 @@ interface StageProps {
   shares: Share[];
   onPick: (id: Share["id"]) => void;
   draw: Draw;
+  glass: Glass;
   view: CallView;
 }
 
-function Stage({ share, shares, onPick, draw, view }: StageProps) {
+function Stage({ share, shares, onPick, draw, glass, view }: StageProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [drawing, setDrawing] = useState(false);
@@ -420,6 +435,7 @@ function Stage({ share, shares, onPick, draw, view }: StageProps) {
         {share.stream && owner && (
           <DrawLayer draw={draw} share={owner} selfId={view.selfId} video={videoRef} names={names} active={drawing} onExit={stopDrawing} />
         )}
+        {share.id === "self" && share.stream && <GlassNote glass={glass} />}
         <div class="stage-caption">
           <span>{share.id === "self" ? "You are sharing" : `${share.name} is sharing`}</span>
           <span class="stage-preset">{PRESETS[share.preset].label}</span>
@@ -435,6 +451,7 @@ function Stage({ share, shares, onPick, draw, view }: StageProps) {
               <PenIcon width={16} height={16} />
             </button>
           )}
+          {share.id === "self" && share.stream && <GlassToggle glass={glass} />}
           {drawing && owner && (
             <button class="btn btn-ghost btn-sm" data-testid="draw-clear" onClick={() => draw.send({ t: "clear", s: owner })} aria-label="Clear your drawing" title="Clear your drawing">
               <EraserIcon width={16} height={16} />
@@ -650,4 +667,101 @@ function useRoomSeats(roomId: string): number {
     return () => { alive = false; };
   }, [roomId]);
   return seats;
+}
+
+function useGlassState(glass: Glass): GlassState {
+  const [state, setState] = useState(glass.state);
+  useEffect(() => {
+    setState(glass.state);
+    return glass.subscribe(setState);
+  }, [glass]);
+  return state;
+}
+
+function GlassToggle({ glass }: { glass: Glass }) {
+  const state = useGlassState(glass);
+  const label = state.k === "drawing" ? `Marks show on your desktop (${state.output}). Turn off` : "Show marks on my desktop";
+  // Lit only while marks really show; muted while waiting; the attention color when something needs doing.
+  const look = !glass.on ? "off" : state.k === "drawing" ? "drawing" : state.k === "connecting" || state.k === "not-monitor" ? "pending" : "attention";
+  return (
+    <button
+      class="btn btn-ghost btn-sm glass-toggle"
+      aria-pressed={glass.on}
+      data-state={look}
+      data-testid="glass-toggle"
+      onClick={() => glass.setEnabled(!glass.on)}
+      aria-label={label}
+      title={label}
+    >
+      <ScreenMarksIcon width={16} height={16} />
+    </button>
+  );
+}
+
+/** What stands between the person and marks on their desktop, and what to do about it. */
+function GlassNote({ glass }: { glass: Glass }) {
+  const state = useGlassState(glass);
+  const [copy, setCopy] = useState<"idle" | "done" | "failed">("idle");
+  let text: string;
+  let command: string | null = null;
+  let after: string | null = null;
+  let quiet = false;
+  switch (state.k) {
+    case "off":
+    case "idle":
+    case "drawing":
+      return null;
+    case "connecting":
+      text = "Connecting to Streamroom Glass.";
+      quiet = true;
+      break;
+    case "missing":
+      text = "Streamroom couldn't reach Streamroom Glass on this computer. If it isn't running, start it with:";
+      command = glassCommand(location.origin);
+      after = "If it is running, check that it was started with this address, and that this site may connect to apps on this computer (site settings, next to the address bar).";
+      break;
+    case "outdated":
+      text = "This Streamroom Glass doesn't match this Streamroom. Update it, then turn this off and on.";
+      break;
+    case "replaced":
+      text = "Another Streamroom tab is using Streamroom Glass. Turn this off and on to use it here.";
+      break;
+    case "not-monitor":
+      text = state.surface
+        ? "Share an entire screen to see marks on your desktop, or turn this off."
+        : "This browser doesn't say what you're sharing. Use Chrome or Edge to see marks on your desktop, or turn this off.";
+      quiet = true;
+      break;
+    case "unplaced":
+      if (state.why === "ambiguous") {
+        text = `More than one monitor has the shape of your share (${state.outputs.join(", ")}). Stop Streamroom Glass with Ctrl+C and start it again with the one you share, for example:`;
+        command = glassCommand(location.origin, state.outputs[0]?.split(" ")[0] ?? "NAME");
+      } else {
+        text = `Streamroom Glass can't tell which monitor this is: your share is ${state.share}, and your monitors are ${state.outputs.join(", ")}. Share a whole monitor, and if you started Streamroom Glass with --output, check the name.`;
+      }
+      break;
+  }
+  const copyCommand = () => {
+    if (!command) return;
+    const done = (result: "done" | "failed") => {
+      setCopy(result);
+      setTimeout(() => setCopy("idle"), 2000);
+    };
+    if (!navigator.clipboard) return done("failed");
+    navigator.clipboard.writeText(command).then(() => done("done"), () => done("failed"));
+  };
+  return (
+    <div class="glass-note" role="status" data-testid="glass-note" data-tone={quiet ? "quiet" : "attention"}>
+      <p>{text}</p>
+      {command && (
+        <div class="glass-command">
+          <code>{command}</code>
+          <button class="btn btn-ghost btn-sm" onClick={copyCommand}>
+            {copy === "done" ? "Copied" : copy === "failed" ? "Select it to copy" : "Copy"}
+          </button>
+        </div>
+      )}
+      {after && <p class="glass-after">{after}</p>}
+    </div>
+  );
 }
