@@ -195,7 +195,10 @@ impl Glass {
     /// a timer wakes it for the next pointer to idle out or stroke to start fading.
     fn draw(&mut self, qh: &QueueHandle<Self>) {
         let now = self.now();
-        self.app.board.prune(now);
+        // Something just faded or idled out: the frame without it still has to be painted.
+        if self.app.board.prune(now) {
+            self.dirty = true;
+        }
         let due = self.app.board.next_change(now);
         let fading = due.is_some_and(|t| t <= now);
         // A pending frame callback calls back here.

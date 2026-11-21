@@ -129,15 +129,20 @@ impl Board {
         self.authors.is_empty()
     }
 
-    /// Drops whatever has faded out by `now`. Call before `visible`.
-    pub fn prune(&mut self, now: f64) {
+    /// Drops whatever has faded out by `now`, and says whether anything went (so the picture changed).
+    pub fn prune(&mut self, now: f64) -> bool {
+        let mut dropped = false;
         self.authors.retain(|_, marks| {
             if marks.pointer.is_some_and(|p| now - p.at >= POINTER_IDLE_MS) {
                 marks.pointer = None;
+                dropped = true;
             }
+            let before = marks.strokes.len();
             marks.strokes.retain(|s| stroke_alpha(s, now) > 0.0);
+            dropped |= marks.strokes.len() != before;
             marks.pointer.is_some() || !marks.strokes.is_empty()
         });
+        dropped
     }
 
     /// When the picture next changes on its own: now while a stroke fades, else the next time a stroke
@@ -258,6 +263,18 @@ mod tests {
         assert_eq!(b.next_change(0.0), Some(STROKE_STALL_MS));
         b.prune(STROKE_STALL_MS);
         assert!(b.is_empty());
+    }
+
+    #[test]
+    fn pruning_says_when_something_went_so_the_cleared_picture_gets_painted() {
+        let mut b = Board::default();
+        draw(&mut b, "a", &[Mark::Down { x: 0.1, y: 0.1 }, Mark::Up, Mark::Leave], 0.0);
+        let end = STROKE_HOLD_MS + STROKE_FADE_MS;
+        assert!(!b.prune(end - 1.0));
+        assert!(b.prune(end));
+        assert!(!b.prune(end + 1.0));
+        draw(&mut b, "a", &[Mark::Move { x: 0.1, y: 0.1 }], 0.0);
+        assert!(b.prune(POINTER_IDLE_MS));
     }
 
     #[test]
