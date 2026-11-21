@@ -42,3 +42,17 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/ice)" = 403
       - run: pnpm cf:check
       - run: docker build .
+
+  glass:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: glass
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
