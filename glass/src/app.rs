@@ -99,8 +99,10 @@ impl App {
             // Not mapped yet: say nothing until it is.
             Target::On(_) | Target::Nowhere => return None,
             Target::Unplaced(why) => {
-                let sizes: Vec<String> =
-                    outputs.iter().map(|o| format!("{} {}x{}", o.name, o.width, o.height)).collect();
+                // Too many: the ones to choose from. None: every monitor, to compare with the share.
+                let listed =
+                    outputs.iter().filter(|o| why != "ambiguous" || monitor::fits(o, share.width, share.height));
+                let sizes: Vec<String> = listed.map(|o| format!("{} {}×{}", o.name, o.width, o.height)).collect();
                 protocol::status(share.generation, Err((why, &sizes)))
             }
         };
@@ -208,7 +210,21 @@ mod tests {
         let (_, text) = app.status(&outs, None).unwrap();
         assert_eq!(
             text,
-            r#"{"gen":1,"output":null,"outputs":["DP-2 3440x1440","DP-3 1440x2560"],"t":"status","why":"no-match"}"#
+            r#"{"gen":1,"output":null,"outputs":["DP-2 3440×1440","DP-3 1440×2560"],"t":"status","why":"no-match"}"#
+        );
+        // Too many matches: only those are listed, to choose from.
+        let twins = vec![
+            Output { name: "eDP-1".into(), width: 1600, height: 1000 },
+            Output { name: "DP-1".into(), width: 1920, height: 1080 },
+            Output { name: "DP-2".into(), width: 1920, height: 1080 },
+        ];
+        let mut app = App::new(None);
+        app.handle(Event::Connected(1), 0.0);
+        app.handle(msg(1, Inbound::Share { generation: 1, me: ME.into(), w: 1280, h: 720 }), 0.0);
+        let (_, text) = app.status(&twins, None).unwrap();
+        assert_eq!(
+            text,
+            r#"{"gen":1,"output":null,"outputs":["DP-1 1920×1080","DP-2 1920×1080"],"t":"status","why":"ambiguous"}"#
         );
         // --output naming a monitor of another shape doesn't override the check.
         let mut app = App::new(Some("DP-3".into()));

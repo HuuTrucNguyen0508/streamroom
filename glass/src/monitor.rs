@@ -20,12 +20,17 @@ pub enum Pick<'a> {
 /// Captures are scaled down to fit the preset, so only the aspect ratio survives, give or take rounding.
 const TOLERANCE: f64 = 0.015;
 
-pub fn pick<'a>(outputs: &'a [Output], share_w: u32, share_h: u32, wanted: Option<&str>) -> Pick<'a> {
+/// Whether `output` has the shape of a share_w×share_h picture.
+pub fn fits(output: &Output, share_w: u32, share_h: u32) -> bool {
     let ratio = share_w as f64 / share_h as f64;
-    let fits = |o: &&Output| {
-        o.width > 0 && o.height > 0 && ((o.width as f64 / o.height as f64) - ratio).abs() / ratio <= TOLERANCE
-    };
-    let mut matches = outputs.iter().filter(|o| wanted.is_none_or(|w| o.name == w)).filter(fits);
+    output.width > 0
+        && output.height > 0
+        && ((output.width as f64 / output.height as f64) - ratio).abs() / ratio <= TOLERANCE
+}
+
+pub fn pick<'a>(outputs: &'a [Output], share_w: u32, share_h: u32, wanted: Option<&str>) -> Pick<'a> {
+    let mut matches =
+        outputs.iter().filter(|o| wanted.is_none_or(|w| o.name == w)).filter(|o| fits(o, share_w, share_h));
     match (matches.next(), matches.next()) {
         (Some(o), None) => Pick::Output(o),
         (None, _) => Pick::NoMatch,

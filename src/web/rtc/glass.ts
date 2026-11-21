@@ -69,6 +69,8 @@ export class Glass {
   private surface = "";
   private sharing = false;
   private current: GlassState;
+  /** Another tab took over, or the app is another version: stay away until the person turns this off and on. */
+  private suppressed: "replaced" | "outdated" | null = null;
   private readonly listeners = new Set<(state: GlassState) => void>();
 
   constructor(private readonly deps: GlassDeps) {
@@ -92,6 +94,7 @@ export class Glass {
 
   setEnabled(on: boolean): void {
     this.enabled = on;
+    this.suppressed = null;
     try {
       this.storage()?.setItem(STORAGE_KEY, on ? "1" : "0");
     } catch {
@@ -104,7 +107,8 @@ export class Glass {
 
   /** Try now instead of waiting out the backoff, e.g. when the person comes back to this tab. */
   retry(): void {
-    if (this.current.k !== "missing") return;
+    // Only while waiting out the backoff: not in the middle of a connection attempt.
+    if (this.current.k !== "missing" || this.retryTimer === null) return;
     this.retryMs = RETRY_MIN_MS;
     this.disconnect();
     this.reconcile();
@@ -131,12 +135,6 @@ export class Glass {
       if (this.ready) this.set({ k: "connecting" });
     }
     this.reconcile();
-  }
-
-  close(): void {
-    this.deps.draw.onEvent = null;
-    this.disconnect();
-    this.listeners.clear();
   }
 
   private forward(event: DrawEvent): void {
@@ -176,7 +174,7 @@ export class Glass {
       if (this.sharing) return this.set({ k: "not-monitor", surface: this.surface });
       return this.set({ k: "idle" });
     }
-    if (this.current.k === "replaced" || this.current.k === "outdated") return;
+    if (this.suppressed) return this.set({ k: this.suppressed });
     if (!this.socket && this.retryTimer === null) this.open();
   }
 
@@ -202,6 +200,7 @@ export class Glass {
       if (msg.t === "hello") {
         if (msg.app !== "streamroom-glass" || msg.v !== GLASS_VERSION) {
           this.disconnect();
+          this.suppressed = "outdated";
           return this.set({ k: "outdated" });
         }
         this.ready = true;
@@ -230,7 +229,10 @@ export class Glass {
   private lost(code: number | null): void {
     this.socket = null;
     this.ready = false;
-    if (code === REPLACED) return this.set({ k: "replaced" });
+    if (code === REPLACED) {
+      this.suppressed = "replaced";
+      return this.set({ k: "replaced" });
+    }
     if (!this.enabled || !this.share) return this.reconcile();
     this.set({ k: "missing" });
     const wait = this.retryMs;
@@ -255,7 +257,6 @@ export class Glass {
         // Already closing.
       }
     }
-    if (this.current.k === "replaced" || this.current.k === "outdated") this.current = { k: "idle" };
   }
 
   private send(msg: object, droppable = false): void {

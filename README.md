@@ -105,13 +105,13 @@ Pointers and strokes travel directly between browsers on a `draw` data channel, 
 
 ### Marks on the sharer's desktop
 
-The person sharing sees the marks on their own preview in Streamroom. To see them on their real desktop as well, over whatever app they're using, they can run [Streamroom Glass](glass/README.md), a small app that draws the marks on a see-through layer that clicks and typing pass straight through. It works on Linux desktops with Wayland layer-shell support: Hyprland, Sway and KDE Plasma (not GNOME). There's no Windows version yet.
+The person sharing sees the marks on their own preview in Streamroom. To see them on their real desktop as well, over whatever app they're using, they can run [Streamroom Glass](glass/README.md), a small app that draws the marks on a see-through layer that clicks and typing pass straight through. It works on Linux desktops with Wayland layer-shell support. It's tested on Hyprland, and Sway and KDE Plasma should work too; GNOME doesn't support it. There's no Windows version yet.
 
-1. Build it once with `cargo build --release` in `glass/`. The app is `glass/target/release/streamroom-glass`.
+1. Build it once with `cargo build --release` in `glass/`, and copy `glass/target/release/streamroom-glass` to a folder on your `PATH`, such as `~/.local/bin`.
 2. Share an entire screen in Chrome or Edge, then select **Show marks on my desktop** next to the pen on your own share. The note above the button shows the command to run, with your Streamroom address filled in. **Copy** copies it.
 3. Run the command. The button lights up once the marks show on your desktop.
 
-The browser asks once for permission to reach apps on this computer. The switch stays on for your next shares. Viewers don't install anything.
+The browser asks once for permission to reach apps on this computer. If you block it, Streamroom can't reach the app; allow it again in the site settings next to the address bar. The switch stays on for your next shares. Viewers don't install anything.
 
 On Linux, the marks on your desktop are also in your shared screen, so viewers see each mark twice: their own copy right away, and the one in the video a moment later. Other people's pointers trail behind them the same way.
 

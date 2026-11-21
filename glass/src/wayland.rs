@@ -2,12 +2,13 @@
 //! on the Overlay layer of the shared monitor that takes no clicks and no keyboard focus.
 
 use std::net::TcpListener;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
-use smithay_client_toolkit::reexports::calloop::EventLoop;
 use smithay_client_toolkit::reexports::calloop::channel::{self, Event as ChannelEvent};
+use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle, RegistrationToken};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::shell::WaylandSurface;
@@ -24,8 +25,9 @@ use wayland_client::{Connection, QueueHandle};
 
 use crate::app::{App, Target};
 use crate::monitor::Output;
+use crate::protocol::Inbound;
 use crate::render::{self, Renderer};
-use crate::server::{self, Outbox};
+use crate::server::{self, Event, Outbox};
 
 pub fn run(listener: TcpListener, origins: Vec<String>, wanted: Option<String>) -> Result<(), String> {
     let conn = Connection::connect_to_env().map_err(|e| format!("Can't reach the Wayland compositor: {e}"))?;
@@ -47,11 +49,14 @@ pub fn run(listener: TcpListener, origins: Vec<String>, wanted: Option<String>) 
         .handle()
         .insert_source(rx, |event, _, glass: &mut Glass| {
             if let ChannelEvent::Msg(event) = event {
+                // Marks only change the picture; everything else may change where it goes.
+                let marks_only = matches!(&event, Event::Message(_, Inbound::Mark { .. } | Inbound::Forget { .. }));
                 let now = glass.now();
                 if glass.app.handle(event, now) {
                     glass.dirty = true;
                 }
-                glass.sync(&glass.qh.clone());
+                let qh = glass.qh.clone();
+                if marks_only { glass.draw(&qh) } else { glass.sync(&qh) }
             }
         })
         .map_err(|e| e.to_string())?;
@@ -64,6 +69,8 @@ pub fn run(listener: TcpListener, origins: Vec<String>, wanted: Option<String>) 
         shm,
         pool: None,
         qh: qh.clone(),
+        handle: event_loop.handle(),
+        timer: None,
         app: App::new(wanted),
         outbox,
         renderer: Renderer::new(render::system_font()),
@@ -72,8 +79,6 @@ pub fn run(listener: TcpListener, origins: Vec<String>, wanted: Option<String>) 
         started: Instant::now(),
         monitors: String::new(),
     };
-    // Let the outputs arrive before listing them.
-    event_loop.dispatch(None, &mut glass).map_err(|e| e.to_string())?;
     event_loop.run(None, &mut glass, |_| {}).map_err(|e| e.to_string())
 }
 
@@ -96,6 +101,9 @@ struct Glass {
     shm: Shm,
     pool: Option<SlotPool>,
     qh: QueueHandle<Glass>,
+    handle: LoopHandle<'static, Glass>,
+    /// Wakes the overlay when a pointer idles out or a stroke starts fading.
+    timer: Option<RegistrationToken>,
     app: App,
     outbox: Outbox,
     renderer: Renderer,
@@ -126,7 +134,7 @@ impl Glass {
     fn sync(&mut self, qh: &QueueHandle<Self>) {
         let list = self.output_list();
         let outputs: Vec<Output> = list.iter().map(|(o, ..)| o.clone()).collect();
-        let names: Vec<String> = outputs.iter().map(|o| format!("{} {}x{}", o.name, o.width, o.height)).collect();
+        let names: Vec<String> = outputs.iter().map(|o| format!("{} {}×{}", o.name, o.width, o.height)).collect();
         let names = names.join(", ");
         if names != self.monitors {
             eprintln!("Monitors: {names}");
@@ -148,7 +156,9 @@ impl Glass {
             if text.contains("\"why\":\"ambiguous\"") {
                 eprintln!("More than one monitor matches the share. Start again with --output and the one you share.");
             } else if text.contains("\"why\":\"no-match\"") {
-                eprintln!("The share matches none of the monitors, so nothing is drawn. Share an entire screen.");
+                eprintln!(
+                    "The share matches none of the monitors, so nothing is drawn. Share a whole monitor, and check the name given to --output."
+                );
             }
             self.outbox.send(conn, text);
         }
@@ -181,21 +191,25 @@ impl Glass {
         Overlay { layer, output: name, wl_output, size: None, scale, frame_pending: false, pixmap: None }
     }
 
-    /// Paints a frame if something changed or is still fading, at most once per compositor frame.
+    /// Paints a frame when something changed, and every compositor frame while a stroke fades. In between,
+    /// a timer wakes it for the next pointer to idle out or stroke to start fading.
     fn draw(&mut self, qh: &QueueHandle<Self>) {
         let now = self.now();
-        let Some(overlay) = self.overlay.as_mut() else { return };
-        let Some((w, h)) = overlay.size else { return };
-        if overlay.frame_pending || !(self.dirty || !self.app.board.is_empty()) {
-            return;
+        self.app.board.prune(now);
+        let due = self.app.board.next_change(now);
+        let fading = due.is_some_and(|t| t <= now);
+        // A pending frame callback calls back here.
+        let Some((w, h)) = self.overlay.as_ref().filter(|o| !o.frame_pending).and_then(|o| o.size) else { return };
+        if !self.dirty && !fading {
+            return self.wake_at(due, now);
         }
         self.dirty = false;
+        let Some(overlay) = self.overlay.as_mut() else { return };
         let (pw, ph) = (w * overlay.scale, h * overlay.scale);
         if overlay.pixmap.as_ref().is_none_or(|p| (p.width(), p.height()) != (pw, ph)) {
             overlay.pixmap = Pixmap::new(pw, ph);
         }
         let Some(pixmap) = overlay.pixmap.as_mut() else { return };
-        self.app.board.prune(now);
         let me = self.app.share.as_ref().map(|s| s.me.as_str());
         self.renderer.paint(pixmap, &self.app.board.visible(now, me), overlay.scale as f32);
 
@@ -216,16 +230,35 @@ impl Glass {
         }
         let surface = overlay.layer.wl_surface();
         let _ = overlay.layer.set_buffer_scale(overlay.scale);
-        surface.damage_buffer(0, 0, pw as i32, ph as i32);
-        surface.frame(qh, FrameCallbackData(surface.clone()));
-        overlay.frame_pending = true;
         if buffer.attach_to(surface).is_ok() {
+            surface.damage_buffer(0, 0, pw as i32, ph as i32);
+            surface.frame(qh, FrameCallbackData(surface.clone()));
             overlay.layer.commit();
+            overlay.frame_pending = true;
         }
+    }
+
+    fn wake_at(&mut self, due: Option<f64>, now: f64) {
+        if let Some(token) = self.timer.take() {
+            self.handle.remove(token);
+        }
+        let Some(due) = due.filter(|&t| t > now) else { return };
+        let timer = Timer::from_duration(Duration::from_secs_f64((due - now) / 1000.0));
+        self.timer = self
+            .handle
+            .insert_source(timer, |_, _, glass| {
+                glass.timer = None;
+                glass.dirty = true;
+                let qh = glass.qh.clone();
+                glass.draw(&qh);
+                TimeoutAction::Drop
+            })
+            .ok();
     }
 }
 
 impl CompositorHandler for Glass {
+    /// The compositor's preferred integer scale for the overlay (fractional scaling isn't handled).
     fn scale_factor_changed(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: &wl_surface::WlSurface, factor: i32) {
         if let Some(o) = self.overlay.as_mut() {
             o.scale = factor.max(1) as u32;
@@ -291,10 +324,6 @@ impl LayerShellHandler for Glass {
             return;
         }
         overlay.size = Some((w, h));
-        // Integer scale only: the output's, unless the surface was told otherwise.
-        if let Some(info) = self.outputs.info(&overlay.wl_output) {
-            overlay.scale = info.scale_factor.max(1) as u32;
-        }
         overlay.frame_pending = false;
         self.dirty = true;
         self.sync(qh);
@@ -314,8 +343,15 @@ impl OutputHandler for Glass {
         self.sync(qh);
     }
 
-    fn output_destroyed(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: wl_output::WlOutput) {
-        self.sync(qh);
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        if self.overlay.as_ref().is_some_and(|o| o.wl_output == output) {
+            self.overlay = None;
+        }
+        // The output is still listed until this handler returns.
+        self.handle.insert_idle(|glass| {
+            let qh = glass.qh.clone();
+            glass.sync(&qh);
+        });
     }
 }
 

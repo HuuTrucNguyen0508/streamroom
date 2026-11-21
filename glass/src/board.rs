@@ -124,6 +124,7 @@ impl Board {
         self.authors.clear();
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.authors.is_empty()
     }
@@ -137,6 +138,32 @@ impl Board {
             marks.strokes.retain(|s| stroke_alpha(s, now) > 0.0);
             marks.pointer.is_some() || !marks.strokes.is_empty()
         });
+    }
+
+    /// When the picture next changes on its own: now while a stroke fades, else the next time a stroke
+    /// starts fading or a pointer idles out. None when nothing is left to change.
+    pub fn next_change(&self, now: f64) -> Option<f64> {
+        let mut due: Option<f64> = None;
+        let mut at = |t: f64| due = Some(due.map_or(t, |d| d.min(t)));
+        for marks in self.authors.values() {
+            if let Some(p) = marks.pointer {
+                at(p.at + POINTER_IDLE_MS);
+            }
+            for s in &marks.strokes {
+                // A stalled open stroke counts as finished at its last point, so it vanishes at once.
+                let Some(ended) = s.ended_at else {
+                    at(s.last_at + STROKE_STALL_MS);
+                    continue;
+                };
+                let fade = ended + STROKE_HOLD_MS;
+                if now < fade {
+                    at(fade);
+                } else if now < fade + STROKE_FADE_MS {
+                    at(now);
+                }
+            }
+        }
+        due
     }
 
     /// What to paint at `now`. `hide_pointer_of` is the sharer, whose real cursor is already on screen.
@@ -211,6 +238,25 @@ mod tests {
         draw(&mut b, "a", &[Mark::Down { x: 0.5, y: 0.5 }], 0.0);
         let t = STROKE_STALL_MS + STROKE_HOLD_MS + STROKE_FADE_MS;
         b.prune(t);
+        assert!(b.is_empty());
+    }
+
+    #[test]
+    fn says_when_the_picture_next_changes() {
+        let mut b = Board::default();
+        assert_eq!(b.next_change(0.0), None);
+        draw(&mut b, "a", &[Mark::Move { x: 0.1, y: 0.1 }], 0.0);
+        assert_eq!(b.next_change(0.0), Some(POINTER_IDLE_MS));
+        draw(&mut b, "a", &[Mark::Down { x: 0.1, y: 0.1 }, Mark::Up], 100.0);
+        // The stroke starts fading before the pointer idles out; while it fades, the answer is now.
+        assert_eq!(b.next_change(100.0), Some(100.0 + STROKE_HOLD_MS));
+        assert_eq!(b.next_change(100.0 + STROKE_HOLD_MS + 1.0), Some(100.0 + STROKE_HOLD_MS + 1.0));
+        // An open stroke with its pointer gone changes when it stalls.
+        let mut b = Board::default();
+        draw(&mut b, "a", &[Mark::Down { x: 0.1, y: 0.1 }], 0.0);
+        b.authors.get_mut("a").unwrap().pointer = None;
+        assert_eq!(b.next_change(0.0), Some(STROKE_STALL_MS));
+        b.prune(STROKE_STALL_MS);
         assert!(b.is_empty());
     }
 

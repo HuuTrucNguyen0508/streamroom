@@ -12,7 +12,7 @@ const MAX_NAME_CHARS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inbound {
-    /// A monitor share started (or its size changed). `me` is the sharer's member id; `w`×`h` the
+    /// A monitor share started, or the tab (re)connected during one. `me` is the sharer's member id; `w`×`h` the
     /// captured picture, used to find which monitor it is.
     Share {
         generation: u32,

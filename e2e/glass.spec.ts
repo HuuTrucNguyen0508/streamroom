@@ -73,7 +73,7 @@ test("the sharer's tab sends marks on their screen to Streamroom Glass", async (
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await expect(toggle).toHaveAttribute("data-state", "attention");
     const note = ada.getByTestId("glass-note");
-    await expect(note).toContainText("Streamroom Glass isn't running");
+    await expect(note).toContainText("Streamroom couldn't reach Streamroom Glass");
     await expect(note.locator("code")).toHaveText(`streamroom-glass --origin ${origin}`);
     await ada.screenshot({ path: "test-results/glass-missing.png" });
 

@@ -105,10 +105,14 @@ fn serve(
     let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(50)));
 
     let (out, outgoing) = mpsc::channel();
-    if let Some(old) = current.lock().unwrap().replace(Current { id, out }) {
-        let _ = old.out.send(Out::Replaced);
+    {
+        // Under the lock, so Connected events arrive in the order tabs took over.
+        let mut cur = current.lock().unwrap();
+        if let Some(old) = cur.replace(Current { id, out }) {
+            let _ = old.out.send(Out::Replaced);
+        }
+        emit(Event::Connected(id));
     }
-    emit(Event::Connected(id));
     if ws.send(Message::text(protocol::hello())).is_ok() {
         run(id, &mut ws, &outgoing, emit);
     }
@@ -255,6 +259,47 @@ mod tests {
             }
         };
         assert_eq!(closed, Some(1008));
+    }
+
+    #[test]
+    fn tabs_connecting_at_once_end_with_the_app_following_the_tab_that_stayed() {
+        for _ in 0..8 {
+            let (port, _outbox, rx) = server();
+            let host = format!("127.0.0.1:{port}");
+            let tabs: Vec<_> = (0..2)
+                .map(|_| {
+                    let host = host.clone();
+                    thread::spawn(move || {
+                        let mut ws = connect(port, ORIGIN, &host).unwrap();
+                        read_text(&mut ws);
+                        ws
+                    })
+                })
+                .collect();
+            let mut tabs: Vec<_> = tabs.into_iter().map(|t| t.join().unwrap()).collect();
+            let mut last_connected = None;
+            while let Ok(e) = rx.recv_timeout(Duration::from_millis(300)) {
+                if let Event::Connected(id) = e {
+                    last_connected = Some(id);
+                }
+            }
+            // Exactly one tab was replaced; the app's tab is the other one, which still gets replies.
+            let replaced: Vec<bool> = tabs
+                .iter_mut()
+                .map(|ws| {
+                    #[allow(irrefutable_let_patterns)] // Only TLS builds have other variants.
+                    if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
+                        let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+                    }
+                    matches!(ws.read(), Ok(Message::Close(Some(f))) if u16::from(f.code) == REPLACED)
+                })
+                .collect();
+            assert_eq!(replaced.iter().filter(|&&r| r).count(), 1);
+            let id = last_connected.unwrap();
+            _outbox.send(id, "you".into());
+            let stayed = replaced.iter().position(|&r| !r).unwrap();
+            assert_eq!(read_text(&mut tabs[stayed]), "you");
+        }
     }
 
     #[test]

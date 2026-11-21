@@ -681,11 +681,13 @@ function useGlassState(glass: Glass): GlassState {
 function GlassToggle({ glass }: { glass: Glass }) {
   const state = useGlassState(glass);
   const label = state.k === "drawing" ? `Marks show on your desktop (${state.output}). Turn off` : "Show marks on my desktop";
+  // Lit only while marks really show; muted while waiting; the attention color when something needs doing.
+  const look = !glass.on ? "off" : state.k === "drawing" ? "drawing" : state.k === "connecting" || state.k === "not-monitor" ? "pending" : "attention";
   return (
     <button
       class="btn btn-ghost btn-sm glass-toggle"
       aria-pressed={glass.on}
-      data-state={state.k === "drawing" ? "drawing" : glass.on ? "attention" : "off"}
+      data-state={look}
       data-testid="glass-toggle"
       onClick={() => glass.setEnabled(!glass.on)}
       aria-label={label}
@@ -699,9 +701,11 @@ function GlassToggle({ glass }: { glass: Glass }) {
 /** What stands between the person and marks on their desktop, and what to do about it. */
 function GlassNote({ glass }: { glass: Glass }) {
   const state = useGlassState(glass);
-  const [copied, setCopied] = useState(false);
+  const [copy, setCopy] = useState<"idle" | "done" | "failed">("idle");
   let text: string;
   let command: string | null = null;
+  let after: string | null = null;
+  let quiet = false;
   switch (state.k) {
     case "off":
     case "idle":
@@ -709,10 +713,12 @@ function GlassNote({ glass }: { glass: Glass }) {
       return null;
     case "connecting":
       text = "Connecting to Streamroom Glass.";
+      quiet = true;
       break;
     case "missing":
-      text = "Streamroom Glass isn't running on this computer. Start it with:";
+      text = "Streamroom couldn't reach Streamroom Glass on this computer. If it isn't running, start it with:";
       command = glassCommand(location.origin);
+      after = "If it is running, check that it was started with this address, and that this site may connect to apps on this computer (site settings, next to the address bar).";
       break;
     case "outdated":
       text = "This Streamroom Glass doesn't match this Streamroom. Update it, then turn this off and on.";
@@ -722,36 +728,40 @@ function GlassNote({ glass }: { glass: Glass }) {
       break;
     case "not-monitor":
       text = state.surface
-        ? "Share an entire screen to see marks on your desktop."
-        : "This browser doesn't say what you're sharing. Use Chrome or Edge to see marks on your desktop.";
+        ? "Share an entire screen to see marks on your desktop, or turn this off."
+        : "This browser doesn't say what you're sharing. Use Chrome or Edge to see marks on your desktop, or turn this off.";
+      quiet = true;
       break;
     case "unplaced":
       if (state.why === "ambiguous") {
-        text = `More than one monitor matches your share (${state.outputs.join(", ")}). Start Streamroom Glass with the one you share:`;
+        text = `More than one monitor has the shape of your share (${state.outputs.join(", ")}). Stop Streamroom Glass with Ctrl+C and start it again with the one you share, for example:`;
         command = glassCommand(location.origin, state.outputs[0]?.split(" ")[0] ?? "NAME");
       } else {
-        text = `Your share is ${state.share}, which matches none of your monitors (${state.outputs.join(", ")}). Share an entire screen.`;
+        text = `Streamroom Glass can't tell which monitor this is: your share is ${state.share}, and your monitors are ${state.outputs.join(", ")}. Share a whole monitor, and if you started Streamroom Glass with --output, check the name.`;
       }
       break;
   }
-  const copy = () => {
+  const copyCommand = () => {
     if (!command) return;
-    void navigator.clipboard?.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    const done = (result: "done" | "failed") => {
+      setCopy(result);
+      setTimeout(() => setCopy("idle"), 2000);
+    };
+    if (!navigator.clipboard) return done("failed");
+    navigator.clipboard.writeText(command).then(() => done("done"), () => done("failed"));
   };
   return (
-    <div class="glass-note" role="status" data-testid="glass-note" data-tone={state.k === "connecting" ? "quiet" : "attention"}>
+    <div class="glass-note" role="status" data-testid="glass-note" data-tone={quiet ? "quiet" : "attention"}>
       <p>{text}</p>
       {command && (
         <div class="glass-command">
           <code>{command}</code>
-          <button class="btn btn-ghost btn-sm" onClick={copy}>
-            {copied ? "Copied" : "Copy"}
+          <button class="btn btn-ghost btn-sm" onClick={copyCommand}>
+            {copy === "done" ? "Copied" : copy === "failed" ? "Select it to copy" : "Copy"}
           </button>
         </div>
       )}
+      {after && <p class="glass-after">{after}</p>}
     </div>
   );
 }

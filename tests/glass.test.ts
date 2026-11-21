@@ -170,6 +170,9 @@ describe("Glass", () => {
     expect(glass.state).toEqual({ k: "missing" });
     expect(timers.map((t) => t.ms)).toEqual([1000]);
     timers[0]!.fn();
+    // Mid-attempt, coming back to the tab doesn't start another.
+    glass.retry();
+    expect(sockets).toHaveLength(2);
     last().drop();
     expect(timers.map((t) => t.ms)).toEqual([1000, 2000]);
     // Coming back to the tab tries at once.
@@ -187,6 +190,11 @@ describe("Glass", () => {
     expect(glass.state).toEqual({ k: "replaced" });
     expect(timers).toHaveLength(0);
     glass.retry();
+    expect(sockets).toHaveLength(1);
+    // Nor on its next share.
+    glass.update(null, me);
+    glass.update(screen("s2"), me);
+    expect(glass.state).toEqual({ k: "replaced" });
     expect(sockets).toHaveLength(1);
     // Turning it off and on takes it back.
     glass.setEnabled(false);

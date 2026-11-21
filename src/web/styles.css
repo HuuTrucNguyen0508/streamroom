@@ -591,6 +591,10 @@ select.input {
   color: var(--flare);
 }
 
+.glass-toggle[aria-pressed="true"][data-state="pending"] {
+  color: var(--dust);
+}
+
 .glass-note {
   position: absolute;
   left: 0.75rem;
@@ -615,6 +619,11 @@ select.input {
 
 .glass-note p {
   margin: 0;
+}
+
+.glass-note .glass-after {
+  color: var(--dust);
+  font-size: 0.8125rem;
 }
 
 .glass-command {

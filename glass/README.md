@@ -2,11 +2,11 @@
 
 Streamroom Glass draws the pointers and pen strokes from a Streamroom call on the real desktop of the person sharing their screen. It puts a see-through layer over the shared monitor. Clicks and typing pass straight through it, so you keep using your computer as usual. Viewers don't need it.
 
-It runs on Linux desktops whose compositor supports wlr-layer-shell: Hyprland, Sway and KDE Plasma. GNOME doesn't support it. There's no Windows or macOS version yet.
+It runs on Linux desktops whose compositor supports wlr-layer-shell. It's tested on Hyprland; Sway and KDE Plasma should work too. GNOME doesn't support it. There's no Windows or macOS version yet.
 
 ## Build
 
-You need [Rust](https://rustup.rs) 1.88 or newer. No other libraries are needed.
+You need [Rust](https://rustup.rs) 1.88 or newer. No other libraries are needed to build it. To show names next to pointers, it finds a font with `fc-match` (part of fontconfig, installed on most desktops); without it, the name tags are empty.
 
 ```sh
 cd glass
@@ -25,7 +25,7 @@ streamroom-glass --origin https://streamroom.example.com
 
 Then share an entire screen in Streamroom and select **Show marks on my desktop** next to the pen on your own share. The command Streamroom shows there already has your address filled in.
 
-At start, the app lists your monitors with their sizes on the desktop. It works out which one you share from the shape of the shared picture. If two monitors have the same shape, the button says so and lists them; start the app again with `--output` and the monitor's name:
+At start, the app lists your monitors with their sizes on the desktop. It works out which one you share from the shape of the shared picture. If two monitors have the same shape, the note above the button says so and lists them; start the app again with `--output` and the monitor's name:
 
 ```sh
 streamroom-glass --origin https://streamroom.example.com --output DP-1
