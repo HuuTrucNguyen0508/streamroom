@@ -101,7 +101,19 @@ Limits:
 
 Press the pen in a shared screen's caption to point and draw on it. Everyone watching that screen sees your pointer with your name, and your strokes in your color. Hold the mouse button, or touch and drag, to draw. A stroke stays for a few seconds after you let go, then fades. The eraser clears your own strokes, and **Esc** or the pen puts the pen down. Clicks pass through to the page again once the pen is down.
 
-Pointers and strokes travel directly between browsers on a `draw` data channel, as fractions of the shared picture, so they line up on any screen size. They are never stored. The person sharing sees the marks on their own preview in Streamroom, not on their real desktop: drawing over the desktop itself would need a small app on the sharer's computer.
+Pointers and strokes travel directly between browsers on a `draw` data channel, as fractions of the shared picture, so they line up on any screen size. They are never stored.
+
+### Marks on the sharer's desktop
+
+The person sharing sees the marks on their own preview in Streamroom. To see them on their real desktop as well, over whatever app they're using, they can run [Streamroom Glass](glass/README.md), a small app that draws the marks on a see-through layer that clicks and typing pass straight through. It works on Linux desktops with Wayland layer-shell support: Hyprland, Sway and KDE Plasma (not GNOME). There's no Windows version yet.
+
+1. Build it once with `cargo build --release` in `glass/`. The app is `glass/target/release/streamroom-glass`.
+2. Share an entire screen in Chrome or Edge, then select **Show marks on my desktop** next to the pen on your own share. The note above the button shows the command to run, with your Streamroom address filled in. **Copy** copies it.
+3. Run the command. The button lights up once the marks show on your desktop.
+
+The browser asks once for permission to reach apps on this computer. The switch stays on for your next shares. Viewers don't install anything.
+
+On Linux, the marks on your desktop are also in your shared screen, so viewers see each mark twice: their own copy right away, and the one in the video a moment later. Other people's pointers trail behind them the same way.
 
 ## Install as an app
 

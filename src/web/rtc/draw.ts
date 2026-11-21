@@ -196,6 +196,12 @@ export function colorFor(member: MemberId): string {
   return COLORS[h % COLORS.length]!;
 }
 
+/** Everything that changes the board, for the desktop glass (src/web/rtc/glass.ts). */
+export type DrawEvent =
+  | { k: "mark"; author: MemberId; msg: DrawMessage }
+  | { k: "forget"; member: MemberId }
+  | { k: "clear" };
+
 type Channel = Pick<RTCDataChannel, "readyState" | "bufferedAmount" | "close" | "onmessage" | "onclose"> & { send(data: string): void };
 
 /** The "draw" channels to every peer, plus the board they feed. */
@@ -203,6 +209,8 @@ export class Draw {
   readonly board = new DrawBoard();
   private readonly channels = new Map<MemberId, Channel>();
   private readonly listeners = new Set<() => void>();
+  /** Told about every accepted message and every forget, synchronously, even in a hidden tab. */
+  onEvent: ((event: DrawEvent) => void) | null = null;
 
   constructor(
     private readonly selfId: () => MemberId | null,
@@ -220,6 +228,7 @@ export class Draw {
       const msg = parseDraw(ev.data);
       if (!msg) return;
       this.board.apply(member, msg, this.now());
+      this.onEvent?.({ k: "mark", author: member, msg });
       this.changed();
     };
     dc.onclose = () => {
@@ -235,6 +244,7 @@ export class Draw {
     }
     this.channels.delete(member);
     this.board.forget(member);
+    this.onEvent?.({ k: "forget", member });
     this.changed();
   }
 
@@ -243,6 +253,7 @@ export class Draw {
     const self = this.selfId();
     if (self === null) return;
     this.board.apply(self, msg, this.now());
+    this.onEvent?.({ k: "mark", author: self, msg });
     this.changed();
     const data = encodeDraw(msg);
     for (const dc of this.channels.values()) {
@@ -268,6 +279,7 @@ export class Draw {
       dc.close();
     }
     this.board.clearAll();
+    this.onEvent?.({ k: "clear" });
     this.changed();
   }
 
